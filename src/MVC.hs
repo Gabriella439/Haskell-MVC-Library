@@ -164,7 +164,7 @@ handling k = handle (getFirst . getConstant . k (Constant . First . Just))
     -- ^
 (<#>) = handling
 
-infixr 4 <#>
+infixr 7 <#>
 
 {- $reexports
     @Control.Arrow@ exports 'Kleisli'
