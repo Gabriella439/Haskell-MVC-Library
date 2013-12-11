@@ -1,0 +1,29 @@
+Name: mvc
+Version: 1.0.0
+Cabal-Version: >=1.8.0.2
+Build-Type: Simple
+License: BSD3
+License-File: LICENSE
+Copyright: 2013 Gabriel Gonzalez
+Author: Gabriel Gonzalez
+Maintainer: Gabriel439@gmail.com
+Bug-Reports: https://github.com/Gabriel439/Haskell-MVC-Library/issues
+Synopsis: Model-view-controller
+Description: Use this library to consolidate all your views into a single view
+  and consolidate all your controllers into a single controller.  This
+  consolidation separates view/controller logic from model logic.
+Category: Control, Concurrency
+Source-Repository head
+    Type: git
+    Location: https://github.com/Gabriel439/Haskell-MVC-Library
+
+Library
+    Hs-Source-Dirs: src
+    Build-Depends:
+        base              >= 4       && < 5  ,
+        pipes             >= 4.0.0   && < 4.1,
+        pipes-concurrency >= 2.0.1   && < 2.1,
+        stm               >= 2.4     && < 2.5,
+        transformers      >= 0.2.0.0 && < 0.4 
+    Exposed-Modules: MVC
+    GHC-Options: -O2
