@@ -3,10 +3,7 @@ module MVC (
       Model
     , View(..)
     , Controller(..)
-
-    -- * Pipe utilities
-    , fromProducer
-    , fromConsumer
+    , runMVC
 
     -- * Managed Resources
     , Managed
@@ -18,31 +15,40 @@ module MVC (
     , handling
     , (<#>)
 
+    -- * Pipe utilities
+    , fromProducer
+    , fromConsumer
+
     -- * Re-exports
-    , (<$>)
-    , (<$)
     -- $reexports
+    , module Control.Arrow
+    , module Control.Category
+    , module Control.Monad.Trans.State.Strict
     , module Data.Functor.Constant
     , module Data.Monoid
     , module Pipes
     , module Pipes.Concurrent
     ) where
 
-import Control.Applicative (
-    Applicative(pure, (<*>)), Alternative(empty, (<|>)), (<$>), (<$), liftA2 )
-import Control.Arrow (Kleisli(Kleisli, runKleisli))
+import Control.Applicative
+import Control.Arrow
+import Control.Category
 import Control.Concurrent.Async (withAsync, wait)
 import Control.Concurrent.STM (STM)
+import Control.Monad.Trans.State.Strict
 import Data.Functor.Constant (Constant(Constant, getConstant))
+import Data.Functor.Identity (Identity, runIdentity)
 import Data.Monoid (
     Monoid(mempty, mappend, mconcat), (<>), First(First, getFirst) )
 import Pipes
 import Pipes.Concurrent
 
-{-| A @(Model m a b)@ converts every @a@ into an effectful stream of 0 or more
-    @b@s
+import Prelude hiding ((.), id)
+
+{-| A @(Model s a b)@ converts every @a@ into an effectful stream of 0 or more
+    @b@s while interacting with a pure state @s@
 -}
-type Model m = Kleisli (ListT m)
+type Model s = Kleisli (ListT (State s))
 
 -- | A `View` is an `Output` bundled with resource management logic
 newtype View a = View { runView :: Managed (Output a) }
@@ -70,27 +76,18 @@ instance Monoid (Controller a) where
     mempty = Controller (pure mempty)
     mappend (Controller x) (Controller y) = Controller (liftA2 mappend x y)
 
--- | Create a 'Controller' from a 'Producer'
-fromProducer :: Producer a IO () -> Controller a
-fromProducer producer = Controller $ manage $ \k -> do
-    (output, input, seal) <- spawn' Unbounded
-    let m = do
-            runEffect $ producer >-> toOutput output
-            atomically seal
-    withAsync m $ \a -> do
-        k input
-        wait a
+-- | Connect a 'Model', 'View', and 'Controller' into a complete application
+runMVC :: Controller a -> Model s a b -> View b -> s -> IO ()
+runMVC c m v s =
+    with (liftA2 (,) (runController c) (runView v)) $ \(i, o) ->
+        flip evalStateT s $ runEffect $
+            hoist lift (fromInput i) >-> p >-> hoist lift (toOutput o)
+  where
+    p = for cat $ \a ->
+        hoist (hoist generalize) $ every (runKleisli m a)
 
--- | Create a 'View' from a 'Consumer'
-fromConsumer :: Consumer a IO () -> View a
-fromConsumer consumer = View $ manage $ \k -> do
-    (output, input, seal) <- spawn' Unbounded
-    let m = do
-            runEffect $ fromInput input >-> consumer
-            atomically seal
-    withAsync m $ \a -> do
-        k output
-        wait a
+    generalize :: (Monad m) => Identity a -> m a
+    generalize = return . runIdentity
 
 -- | A @(Managed r)@ is a resource @r@ bracketed by acquisition and release
 newtype Managed r = Manage
@@ -166,14 +163,32 @@ handling k = handle (getFirst . getConstant . k (Constant . First . Just))
 
 infixr 7 <#>
 
-{- $reexports
-    @Control.Arrow@ exports 'Kleisli'
+-- | Create a 'Controller' from a 'Producer'
+fromProducer :: Producer a IO () -> Controller a
+fromProducer producer = Controller $ manage $ \k -> do
+    (output, input, seal) <- spawn' Unbounded
+    let m = do
+            runEffect $ producer >-> toOutput output
+            atomically seal
+    withAsync m $ \a -> do
+        k input
+        wait a
 
+-- | Create a 'View' from a 'Consumer'
+fromConsumer :: Consumer a IO () -> View a
+fromConsumer consumer = View $ manage $ \k -> do
+    (output, input, seal) <- spawn' Unbounded
+    let m = do
+            runEffect $ fromInput input >-> consumer
+            atomically seal
+    withAsync m $ \a -> do
+        k output
+        wait a
+
+{- $reexports
     @Data.Functor.Constant@ re-exports 'Constant' (the type only)
 
     @Data.Monoid@ re-exports 'Monoid', ('<>'), 'mconcat', and 'First'
 
-    @Pipes@ re-exports everything
-
-    @Pipes.Concurrent@ re-exports everything
+    All other modules re-export everything
 -}
