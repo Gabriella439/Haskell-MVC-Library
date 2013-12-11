@@ -4,6 +4,10 @@ module MVC (
     , View(..)
     , Controller(..)
 
+    -- * Pipe utilities
+    , fromProducer
+    , fromConsumer
+
     -- * Managed Resources
     , Managed
     , with
@@ -12,8 +16,10 @@ module MVC (
     -- * Handlers
     , Handler(..)
     , handling
+    , (<#>)
 
     -- * Re-exports
+    , (<$>)
     -- $reexports
     , module Data.Functor.Constant
     , module Data.Monoid
@@ -22,16 +28,15 @@ module MVC (
     ) where
 
 import Control.Applicative (
-    Applicative(pure, (<*>)), Alternative(empty, (<|>)), liftA2 )
-import Control.Category
-import Control.Arrow
+    Applicative(pure, (<*>)), Alternative(empty, (<|>)), (<$>), liftA2 )
+import Control.Arrow (Kleisli(Kleisli, runKleisli))
+import Control.Concurrent.Async (withAsync, wait)
 import Control.Concurrent.STM (STM)
 import Data.Functor.Constant (Constant(Constant, getConstant))
-import Data.Monoid (Monoid(mempty, mappend), First(First, getFirst))
+import Data.Monoid (
+    Monoid(mempty, mappend, mconcat), (<>), First(First, getFirst) )
 import Pipes
 import Pipes.Concurrent
-
-import Prelude hiding ((.), id)
 
 {-| A @(Model m a b)@ converts every @a@ into an effectful stream of 0 or more
     @b@s
@@ -51,11 +56,42 @@ newtype Controller a = Controller { runController :: Managed (Input a) }
 instance Functor Controller where
     fmap f (Controller x) = Controller (fmap (fmap f) x)
 
+instance Applicative Controller where
+    pure a    = Controller (pure (pure a))
+    mf <*> mx = Controller $
+        liftA2 (<*>) (runController mf) (runController mx)
+
+instance Alternative Controller where
+    empty = mempty
+    (<|>) = mappend
+
 instance Monoid (Controller a) where
     mempty = Controller (pure mempty)
     mappend (Controller x) (Controller y) = Controller (liftA2 mappend x y)
 
--- | A @Managed r@ is a resource @r@ bracketed by acquisition and release
+-- | Create a 'Controller' from a 'Producer'
+fromProducer :: Producer a IO () -> Controller a
+fromProducer producer = Controller $ manage $ \k -> do
+    (output, input, seal) <- spawn' Unbounded
+    let m = do
+            runEffect $ producer >-> toOutput output
+            atomically seal
+    withAsync m $ \a -> do
+        k input
+        wait a
+
+-- | Create a 'View' from a 'Consumer'
+fromConsumer :: Consumer a IO () -> View a
+fromConsumer consumer = View $ manage $ \k -> do
+    (output, input, seal) <- spawn' Unbounded
+    let m = do
+            runEffect $ fromInput input >-> consumer
+            atomically seal
+    withAsync m $ \a -> do
+        k output
+        wait a
+
+-- | A @(Managed r)@ is a resource @r@ bracketed by acquisition and release
 newtype Managed r = Manage
     { -- | Consume a managed resource
       with :: (r -> IO ()) -> IO ()
@@ -98,18 +134,17 @@ instance Handler Output where
 instance Handler View where
     handle f v = View (fmap (handle f) (runView v))
 
-{-| @handling prism action@ only runs the @action@ if the @prism@ matches the
-    @action@'s input, using the prism to transform the input
+{-| This is a variation on 'handle' designed to work with prisms auto-generated
+    by the @lens@ library.  Think of the type as:
+
+> handling :: (Handles f) => Prism' a b -> f b -> f a
+
+    @(handling prism action)@ only runs the @action@ if the @prism@ matches the
+    @action@'s input, using the prism to transform the input.
 
 > handling id = id
 >
 > handling (p1 . p2) = handling p1 . handling p2
-
-> handling :: (Handles f) => Prism'     a b -> f b -> f a
-> handling :: (Handles f) => Traversal' a b -> f b -> f a
-> handling :: (Handles f) => Fold       a b -> f b -> f a
-> handling :: (Handles f) => Lens       a b -> f b -> f a
-> handling :: (Handles f) => Iso'       a b -> f b -> f a
 -}
 handling
     :: (Handler f)
@@ -119,14 +154,23 @@ handling
     -- ^
 handling k = handle (getFirst . getConstant . k (Constant . First . Just))
 
-{- $reexports
-    @Control.Arrow@ re-exports everything
+-- | An infix synonym for 'handling'
+(<#>)
+    :: (Handler f)
+    => ((b -> Constant (First b) b) -> (a -> Constant (First b) a))
+    -- ^
+    -> (f b -> f a)
+    -- ^
+(<#>) = handling
 
-    @Control.Category@ re-exports everything
+infixr 4 <#>
+
+{- $reexports
+    @Control.Arrow@ exports 'Kleisli'
 
     @Data.Functor.Constant@ re-exports 'Constant' (the type only)
 
-    @Data.Monoid@ re-exports 'Monoid' and 'First'
+    @Data.Monoid@ re-exports 'Monoid', ('<>'), 'mconcat', and 'First'
 
     @Pipes@ re-exports everything
 
