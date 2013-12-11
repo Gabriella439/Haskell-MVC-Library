@@ -45,19 +45,41 @@ import Pipes.Concurrent
 
 import Prelude hiding ((.), id)
 
-{-| A @(Model s a b)@ converts every @a@ into an effectful stream of 0 or more
-    @b@s while interacting with a pure state @s@
+{-| A @(Model s a b)@ converts every @(a)@ into an stream of zero or more @(b)@s
+    while interacting with a persistent global state @(s)@
 -}
 type Model s = Kleisli (ListT (State s))
 
--- | A `View` is an `Output` bundled with resource management logic
+{-| A 'View' is an 'Output' bundled with resource management logic
+
+    Use the 'Functor' and 'Monoid' instance of 'View' to combine multiple
+    'View's together:
+
+> viewA :: View A
+> viewB :: View B
+>
+> viewTotal :: View (Either A B)
+> viewTotal = fmap Left viewA <> fmap Right viewB
+-}
 newtype View a = View { runView :: Managed (Output a) }
 
 instance Monoid (View a) where
     mempty = View (pure mempty)
     mappend (View x) (View y) = View (liftA2 mappend x y)
 
--- | A `Controller` is an `Input` bundled with resource management logic
+{-| A 'Controller' is an 'Input' bundled with resource management logic
+
+    Use the 'Handler' and 'Monoid' instance of 'Controller' to bundle
+    multiple 'Controller's together using prisms from the @lens@ library:
+
+> import Control.Lens (_Left, _Right)
+>
+> controllerA :: Controller A
+> controllerB :: Controller B
+>
+> controllerTotal :: Controller (Either A B)
+> controller = handling _Left controllerA <> handling _Right controllerB
+-}
 newtype Controller a = Controller { runController :: Managed (Input a) }
 
 instance Functor Controller where
