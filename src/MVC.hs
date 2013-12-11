@@ -20,6 +20,7 @@ module MVC (
 
     -- * Re-exports
     , (<$>)
+    , (<$)
     -- $reexports
     , module Data.Functor.Constant
     , module Data.Monoid
@@ -28,7 +29,7 @@ module MVC (
     ) where
 
 import Control.Applicative (
-    Applicative(pure, (<*>)), Alternative(empty, (<|>)), (<$>), liftA2 )
+    Applicative(pure, (<*>)), Alternative(empty, (<|>)), (<$>), (<$), liftA2 )
 import Control.Arrow (Kleisli(Kleisli, runKleisli))
 import Control.Concurrent.Async (withAsync, wait)
 import Control.Concurrent.STM (STM)
