@@ -40,6 +40,8 @@
     deterministically, or save and replay old event streams as test cases.
 -}
 
+{-# LANGUAGE RankNTypes #-}
+
 module MVC (
     -- * Controllers and Views
       Model
@@ -57,13 +59,15 @@ module MVC (
     , handling
     , (<#>)
 
-    -- * Pipe utilities
+    -- * Utilities
     -- $study
+    , once
     , fromProducer
     , fromConsumer
 
     -- * Re-exports
     -- $reexports
+    , module Control.Applicative
     , module Control.Arrow
     , module Control.Category
     , module Control.Monad.Trans.State.Strict
@@ -137,11 +141,11 @@ runMVC c m v s =
 -- | A @(Managed r)@ is a resource @(r)@ bracketed by acquisition and release
 newtype Managed r = Manage
     { -- | Consume a managed resource
-      with :: (r -> IO ()) -> IO ()
+      with :: forall x . (r -> IO x) -> IO x
     }
 
 -- | Build a 'Managed' resource
-manage :: ((r -> IO ()) -> IO ()) -> Managed r
+manage :: (forall x . (r -> IO x) -> IO x) -> Managed r
 manage = Manage
 {-# INLINABLE manage #-}
 
@@ -209,9 +213,13 @@ handling k = handle (getFirst . getConstant . k (Constant . First . Just))
 infixr 7 <#>
 
 {- $study
-    Study how 'fromProducer' and 'fromConsumer' are implemented in order to
-    learn how to implement your own 'Controller's and 'View's.
+    Study how these utilities are implemented in order to learn how to implement
+    your own 'Controller's and 'View's.
 -}
+
+-- | Create a 'Controller' that emits a single value
+once :: Controller ()
+once = fromProducer (yield ())
 
 -- | Create a 'Controller' from a 'Producer'
 fromProducer :: Producer a IO () -> Controller a
@@ -221,8 +229,9 @@ fromProducer producer = Controller $ manage $ \k -> do
             runEffect $ producer >-> toOutput output
             atomically seal
     withAsync m $ \a -> do
-        k input
+        x <- k input
         wait a
+        return x
 
 -- | Create a 'View' from a 'Consumer'
 fromConsumer :: Consumer a IO () -> View a
@@ -232,8 +241,9 @@ fromConsumer consumer = View $ manage $ \k -> do
             runEffect $ fromInput input >-> consumer
             atomically seal
     withAsync m $ \a -> do
-        k output
+        x <- k output
         wait a
+        return x
 
 {- $reexports
     @Data.Functor.Constant@ re-exports 'Constant' (the type only)
