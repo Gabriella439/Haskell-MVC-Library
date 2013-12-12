@@ -1,3 +1,38 @@
+{-| Use the 'Model' - 'View' - 'Controller' pattern to separate concurrency from
+    application logic.
+
+    'Controller's represent concurrent inputs to your system.  Use the 'Handler'
+    and 'Monoid' instance of 'Controller' to bundle multiple 'Controller's
+    together using prisms from the @lens@ library:
+
+> controllerA :: Controller A
+> controllerB :: Controller B
+>
+> controllerTotal :: Controller (Either A B)
+> controllerTotal = fmap Left controllerA <> fmap Right controllerB
+
+    'View's represent concurrent outputs to your system.  Use the 'Functor' and
+    'Monoid' instances of 'View' to combine multiple 'View's together into a
+    single 'View':
+
+> import Control.Lens (_Left, _Right)
+>
+> viewA :: View A
+> viewB :: View B
+>
+> viewTotal :: View (Either A B)
+> viewTotal = handling _Left viewA <> handling _Right viewB
+
+    Use @makePrisms@ from the @lens@ library to auto-generate prisms for your
+    own output event streams.
+
+    'Model's are 'Kleisli' arrows and sit in between 'Controller's and 'View's.
+     Use the 'Category', 'Arrow' and 'ArrowChoice' instances for 'Model' (or the
+    @Arrows@ language extension) to combine multiple 'Model's together into a
+    single 'Model'.  Alternatively, unwrap the 'Kleisli' newtype and use the
+    'ListT' monad to build your 'Model'.
+-}
+
 module MVC (
     -- * Controllers and Views
       Model
@@ -16,6 +51,7 @@ module MVC (
     , (<#>)
 
     -- * Pipe utilities
+    -- $study
     , fromProducer
     , fromConsumer
 
@@ -50,36 +86,14 @@ import Prelude hiding ((.), id)
 -}
 type Model s = Kleisli (ListT (State s))
 
-{-| A 'View' is an 'Output' bundled with resource management logic
-
-    Use the 'Functor' and 'Monoid' instance of 'View' to combine multiple
-    'View's together:
-
-> viewA :: View A
-> viewB :: View B
->
-> viewTotal :: View (Either A B)
-> viewTotal = fmap Left viewA <> fmap Right viewB
--}
+-- | A 'View' is an 'Output' bundled with resource management logic
 newtype View a = View { runView :: Managed (Output a) }
 
 instance Monoid (View a) where
     mempty = View (pure mempty)
     mappend (View x) (View y) = View (liftA2 mappend x y)
 
-{-| A 'Controller' is an 'Input' bundled with resource management logic
-
-    Use the 'Handler' and 'Monoid' instance of 'Controller' to bundle
-    multiple 'Controller's together using prisms from the @lens@ library:
-
-> import Control.Lens (_Left, _Right)
->
-> controllerA :: Controller A
-> controllerB :: Controller B
->
-> controllerTotal :: Controller (Either A B)
-> controller = handling _Left controllerA <> handling _Right controllerB
--}
+-- | A 'Controller' is an 'Input' bundled with resource management logic
 newtype Controller a = Controller { runController :: Managed (Input a) }
 
 instance Functor Controller where
@@ -98,7 +112,9 @@ instance Monoid (Controller a) where
     mempty = Controller (pure mempty)
     mappend (Controller x) (Controller y) = Controller (liftA2 mappend x y)
 
--- | Connect a 'Model', 'View', and 'Controller' into a complete application
+{-| Connect a 'Model', 'View', and 'Controller' into a complete application by
+    providing an initial state
+-}
 runMVC :: Controller a -> Model s a b -> View b -> s -> IO ()
 runMVC c m v s =
     with (liftA2 (,) (runController c) (runView v)) $ \(i, o) ->
@@ -111,7 +127,7 @@ runMVC c m v s =
     generalize :: (Monad m) => Identity a -> m a
     generalize = return . runIdentity
 
--- | A @(Managed r)@ is a resource @r@ bracketed by acquisition and release
+-- | A @(Managed r)@ is a resource @(r)@ bracketed by acquisition and release
 newtype Managed r = Manage
     { -- | Consume a managed resource
       with :: (r -> IO ()) -> IO ()
@@ -184,6 +200,11 @@ handling k = handle (getFirst . getConstant . k (Constant . First . Just))
 (<#>) = handling
 
 infixr 7 <#>
+
+{- $study
+    Study how 'fromProducer' and 'fromConsumer' are implemented in order to
+    learn how to implement your own 'Controller's and 'View's.
+-}
 
 -- | Create a 'Controller' from a 'Producer'
 fromProducer :: Producer a IO () -> Controller a
