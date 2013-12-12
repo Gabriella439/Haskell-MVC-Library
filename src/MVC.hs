@@ -1,9 +1,9 @@
 {-| Use the 'Model' - 'View' - 'Controller' pattern to separate concurrency from
     application logic.
 
-    'Controller's represent concurrent inputs to your system.  Use the 'Handler'
+    'Controller's represent concurrent inputs to your system.  Use the 'Functor'
     and 'Monoid' instance of 'Controller' to bundle multiple 'Controller's
-    together using prisms from the @lens@ library:
+    together:
 
 > controllerA :: Controller A
 > controllerB :: Controller B
@@ -11,9 +11,9 @@
 > controllerTotal :: Controller (Either A B)
 > controllerTotal = fmap Left controllerA <> fmap Right controllerB
 
-    'View's represent concurrent outputs to your system.  Use the 'Functor' and
+    'View's represent concurrent outputs to your system.  Use the 'Handler' and
     'Monoid' instances of 'View' to combine multiple 'View's together into a
-    single 'View':
+    single 'View' using prisms from the @lens@ library:
 
 > import Control.Lens (_Left, _Right)
 >
@@ -31,6 +31,13 @@
     @Arrows@ language extension) to combine multiple 'Model's together into a
     single 'Model'.  Alternatively, unwrap the 'Kleisli' newtype and use the
     'ListT' monad to build your 'Model'.
+
+    Connect a 'Model', 'View', and 'Controller' together using 'runMVC' to
+    complete your application.
+
+    The 'Model' is designed to be entirely pure and concurrency-free so that you
+    can @QuickCheck@ it, equationally reason about its behavior, debug it
+    deterministically, or save and replay old event streams as test cases.
 -}
 
 module MVC (
