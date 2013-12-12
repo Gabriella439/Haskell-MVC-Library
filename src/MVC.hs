@@ -162,7 +162,7 @@ instance Monad Managed where
     All instances must satisfy the following laws:
 
 > handle return = id
-> handle (f >=> g) = handle g . handle f
+> handle (f >=> g) = handle f . handle g
 -}
 class Handler f where
     -- | Pre-map a partial getter to define a partial handler
