@@ -22,9 +22,10 @@ Library
     Build-Depends:
         base              >= 4       && < 5  ,
         async             >= 2.0.0   && < 2.1,
+        mmorph            >= 1.0.1   && < 1.1,
         pipes             >= 4.0.0   && < 4.1,
         pipes-concurrency >= 2.1.0   && < 2.2,
         stm               >= 2.4     && < 2.5,
         transformers      >= 0.2.0.0 && < 0.4 
     Exposed-Modules: MVC
-    GHC-Options: -O2
+    GHC-Options: -O2 -Wall
