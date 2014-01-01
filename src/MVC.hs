@@ -26,14 +26,9 @@
     Use @makePrisms@ from the @lens@ library to auto-generate prisms for your
     own output event streams.
 
-    'Model's are 'Kleisli' arrows and sit in between 'Controller's and 'View's.
-     Use the 'Category', 'Arrow' and 'ArrowChoice' instances for 'Model' (or the
-    @Arrows@ language extension) to combine multiple 'Model's together into a
-    single 'Model'.  Alternatively, unwrap the 'Kleisli' newtype and use the
-    'ListT' monad to build your 'Model'.
-
-    Connect a 'Model', 'View', and 'Controller' together using 'runMVC' to
-    complete your application.
+    'Model's are 'Pipe's and sit in between 'Controller's and 'View's.  Connect
+    a 'Model', 'View', and 'Controller' together using 'runMVC' to complete your
+    application.
 
     The 'Model' is designed to be entirely pure and concurrency-free so that you
     can @QuickCheck@ it, equationally reason about its behavior, debug it
@@ -67,9 +62,6 @@ module MVC (
 
     -- * Re-exports
     -- $reexports
-    , module Control.Applicative
-    , module Control.Arrow
-    , module Control.Category
     , module Control.Monad.Trans.State.Strict
     , module Data.Functor.Constant
     , module Data.Monoid
@@ -77,10 +69,9 @@ module MVC (
     , module Pipes.Concurrent
     ) where
 
-import Control.Applicative
-import Control.Arrow
-import Control.Category
-import Control.Concurrent.Async (withAsync, wait)
+import Control.Applicative (
+    Applicative(pure, (<*>)), Alternative(empty, (<|>)), liftA2, (<*))
+import Control.Concurrent.Async (async, link, withAsync)
 import Control.Concurrent.STM (STM)
 import Control.Monad.Trans.State.Strict
 import Data.Functor.Constant (Constant(Constant, getConstant))
@@ -90,12 +81,10 @@ import Data.Monoid (
 import Pipes
 import Pipes.Concurrent
 
-import Prelude hiding ((.), id)
-
-{-| A @(Model s a b)@ converts every @(a)@ into an stream of zero or more @(b)@s
-    while interacting with a persistent global state @(s)@
+{-| A @(Model s a b)@ converts a stream of @(a)@s a stream of @(b)@s while
+    interacting with state @(s)@
 -}
-type Model s = Kleisli (ListT (State s))
+type Model s a b = Pipe a b (State s) ()
 
 -- | A 'View' is an 'Output' bundled with resource management logic
 newtype View a = View { runView :: Managed (Output a) }
@@ -129,11 +118,9 @@ instance Monoid (Controller a) where
 runMVC :: Controller a -> Model s a b -> View b -> s -> IO ()
 runMVC c m v s =
     with (liftA2 (,) (runController c) (runView v)) $ \(i, o) ->
-        flip evalStateT s $ runEffect $
-            hoist lift (fromInput i) >-> p >-> hoist lift (toOutput o)
+        flip evalStateT s $ runEffect $ fromInput i >-> p >-> toOutput o
   where
-    p = for cat $ \a ->
-        hoist (hoist generalize) $ every (runKleisli m a)
+    p = hoist (hoist generalize) m
 
     generalize :: (Monad m) => Identity a -> m a
     generalize = return . runIdentity
@@ -219,31 +206,28 @@ infixr 7 <#>
 
 -- | Create a 'Controller' that emits a single value
 once :: Controller ()
-once = fromProducer (yield ())
+once = fromProducer Single (yield ())
 
 -- | Create a 'Controller' from a 'Producer'
-fromProducer :: Producer a IO () -> Controller a
-fromProducer producer = Controller $ manage $ \k -> do
-    (output, input, seal) <- spawn' Unbounded
-    let m = do
+fromProducer :: Buffer a -> Producer a IO () -> Controller a
+fromProducer buffer producer = Controller $ manage $ \k -> do
+    (output, input, seal) <- spawn' buffer
+    let io = do
             runEffect $ producer >-> toOutput output
-            atomically seal
-    withAsync m $ \a -> do
-        x <- k input
-        wait a
-        return x
+            seal
+    withAsync io $ \_ -> k input <* seal
 
 -- | Create a 'View' from a 'Consumer'
-fromConsumer :: Consumer a IO () -> View a
-fromConsumer consumer = View $ manage $ \k -> do
-    (output, input, seal) <- spawn' Unbounded
-    let m = do
-            runEffect $ fromInput input >-> consumer
-            atomically seal
-    withAsync m $ \a -> do
-        x <- k output
-        wait a
-        return x
+fromConsumer :: Buffer a -> Consumer a IO () -> View a
+fromConsumer buffer consumer = View $ manage $ \k -> do
+    (output, input, seal) <- spawn' buffer
+    a <- async $ do
+        runEffect $ fromInput input >-> consumer
+        seal
+    link a
+    x <- k output
+    seal
+    return x
 
 {- $reexports
     @Data.Functor.Constant@ re-exports 'Constant' (the type only)
