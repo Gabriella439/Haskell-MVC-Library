@@ -9,8 +9,8 @@ module MVC (
     -- * Controller
     -- $controller
       Controller(..)
-    , once
     , fromProducer
+    , once
 
     -- * View
     -- $view
@@ -18,7 +18,7 @@ module MVC (
     , Handler(..)
     , handling
     , (<#>)
-    , fromHandler
+    , fromWrite
 
     -- * Model
     -- $model
@@ -36,11 +36,13 @@ module MVC (
     , module Data.Functor.Constant
     , module Data.Monoid
     , module Pipes
+    , module Pipes.Concurrent
     , (<$>)
     ) where
 
 import Control.Applicative (
-    Applicative(pure, (<*>)), Alternative(empty, (<|>)), liftA2, (<*), (<$>))
+    Applicative(pure, (<*>)),
+    liftA2, (<*), (<$>), (<$) )
 import Control.Concurrent.Async (withAsync)
 import Control.Monad.Morph (generalize)
 import Control.Monad.Trans.State.Strict
@@ -52,7 +54,7 @@ import Pipes.Concurrent
 
 {- $controller
     'Controller's represent concurrent inputs to your system.  Use the 'Functor'
-    and 'Monoid' instance of 'Controller' to bundle multiple 'Controller's
+    and 'Monoid' instances of 'Controller' to bundle multiple 'Controller's
     together:
 
 > controllerA :: Controller A
@@ -68,33 +70,26 @@ newtype Controller a = Controller { runController :: Managed (Input a) }
 instance Functor Controller where
     fmap f (Controller x) = Controller (fmap (fmap f) x)
 
-instance Applicative Controller where
-    pure a    = Controller (pure (pure a))
-    mf <*> mx = Controller $
-        liftA2 (<*>) (runController mf) (runController mx)
-
-instance Alternative Controller where
-    empty = mempty
-    (<|>) = mappend
-
 instance Monoid (Controller a) where
     mempty = Controller (pure mempty)
     mappend (Controller x) (Controller y) = Controller (liftA2 mappend x y)
 
+-- | Create a 'Controller' from a 'Managed' 'Producer'
+fromProducer :: Buffer a -> Managed (Producer a IO ()) -> Controller a
+fromProducer buffer mProducer =
+    Controller $ manage $ \k ->
+    with mProducer $ \producer -> do
+        (output, input, seal) <- spawn' buffer
+        let io = do
+                runEffect $ producer >-> toOutput output
+                seal
+        withAsync io $ \_ -> k input <* seal
+{-# INLINABLE fromProducer #-}
+
 -- | Create a 'Controller' that emits a single value
 once :: Controller ()
-once = fromProducer Single (yield ())
+once = fromProducer Single (pure (yield ()))
 {-# INLINABLE once #-}
-
--- | Create a 'Controller' from a 'Producer'
-fromProducer :: Buffer a -> Producer a IO () -> Controller a
-fromProducer buffer producer = Controller $ manage $ \k -> do
-    (output, input, seal) <- spawn' buffer
-    let io = do
-            runEffect $ producer >-> toOutput output
-            seal
-    withAsync io $ \_ -> k input <* seal
-{-# INLINABLE fromProducer #-}
 
 {- $view
     'View's represent outputs of your system.  Use the 'Handler' and 'Monoid'
@@ -126,7 +121,7 @@ instance Monoid (View a) where
     All instances must satisfy the following laws:
 
 > handle return = id
-> handle (f >=> g) = handle f . handle g
+> handle (f <=< g) = handle g . handle f
 -}
 class Handler f where
     -- | Pre-map a partial getter to define a partial handler
@@ -141,10 +136,10 @@ instance Handler Output where
 instance Handler View where
     handle f v = View (fmap (handle f) (runView v))
 
--- | Create a 'View' from a handler
-fromHandler :: (a -> IO Bool) -> View a
-fromHandler handler = View (pure (Output handler))
-{-# INLINABLE fromHandler #-}
+-- | Create a 'View' from a write action that always succeeds
+fromWrite :: (a -> IO ()) -> View a
+fromWrite handler = View (pure (Output (\a -> True <$ handler a)))
+{-# INLINABLE fromWrite #-}
 
 {-| This is a variation on 'handle' designed to work with prisms auto-generated
     by the @lens@ library.  Think of the type as:
@@ -180,7 +175,7 @@ handling k = handle (getFirst . getConstant . k (Constant . First . Just))
 infixr 7 <#>
 
 {- $model
-    'Model's are 'ListT' streams enriched with global state and sit in between
+    'Model's are 'ListT' streams enriched with state and they sit in between
     'Controller's and 'View's.  Connect a 'Model', 'View', and 'Controller'
     together using 'runMVC' to complete your application.
 
@@ -189,8 +184,8 @@ infixr 7 <#>
     deterministically, or save and replay old event streams as test cases.
 -}
 
-{-| A @(Model s a b)@ converts a stream of @(a)@s a stream of @(b)@s while
-    interacting with state @(s)@
+{-| A @(Model s a b)@ converts each @(a)@ into a stream of @(b)@s while
+    interacting with a state @(s)@
 -}
 type Model s a b = a -> ListT (State s) b
 
