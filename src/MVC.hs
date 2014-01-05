@@ -3,19 +3,19 @@
 
 -}
 
-{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE RankNTypes, FlexibleContexts #-}
 
 module MVC (
     -- * Controller
     -- $controller
-      Controller(..)
+      Controller
     , fromProducer
     , once
 
     -- * View
     -- $view
-    , View(..)
-    , Handler(..)
+    , View
+    , handles
     , handling
     , (<#>)
     , fromWrite
@@ -24,6 +24,9 @@ module MVC (
     -- $model
     , Model
     , runMVC
+    , fromListT
+    , readOnly
+    , stateless
 
     -- * Managed Resources
     , Managed
@@ -32,6 +35,7 @@ module MVC (
 
     -- * Re-exports
     -- $reexports
+    , module Control.Monad.Trans.Reader
     , module Control.Monad.Trans.State.Strict
     , module Data.Functor.Constant
     , module Data.Monoid
@@ -40,13 +44,16 @@ module MVC (
     , (<$>)
     ) where
 
-import Control.Applicative (
-    Applicative(pure, (<*>)),
-    liftA2, (<*), (<$>), (<$) )
+import Control.Applicative (Applicative(pure, (<*>)), (<*), (<$>), (<$))
 import Control.Concurrent.Async (withAsync)
 import Control.Monad.Morph (generalize)
-import Control.Monad.Trans.State.Strict
+import Control.Monad.Trans.State.Strict (StateT, State, get, put, modify)
+import qualified Control.Monad.Trans.State.Strict as S
+import Control.Monad.Trans.Reader (ReaderT, Reader, ask)
+import qualified Control.Monad.Trans.Reader as R
 import Data.Functor.Constant (Constant(Constant, getConstant))
+import Data.Functor.Identity (Identity)
+import qualified Data.Functor.Identity as I
 import Data.Monoid (
     Monoid(mempty, mappend, mconcat), (<>), First(First, getFirst) )
 import Pipes
@@ -57,28 +64,28 @@ import Pipes.Concurrent
     and 'Monoid' instances of 'Controller' to bundle multiple 'Controller's
     together:
 
-> controllerA :: Controller A
-> controllerB :: Controller B
+> controllerA     :: Controller A             -- A source of 'A's
+> controllerB     :: Controller B             -- A source of 'B's
 >
-> controllerTotal :: Controller (Either A B)
+> controllerTotal :: Controller (Either A B)  -- A source of either 'A's or 'B's
 > controllerTotal = fmap Left controllerA <> fmap Right controllerB
+>
+> -- Alternatively:
+> --
+> -- controllerTotal = mconcat
+> --     [ Left  <$> controllerA
+> --     , Right <$> controllerB
+> --     ]
 -}
 
--- | A 'Controller' is an 'Input' bundled with resource management logic
-newtype Controller a = Controller { runController :: Managed (Input a) }
+-- | A 'Controller' is a synonym for an 'Input' from @pipes-concurrency@
+type Controller = Input
 
-instance Functor Controller where
-    fmap f (Controller x) = Controller (fmap (fmap f) x)
-
-instance Monoid (Controller a) where
-    mempty = Controller (pure mempty)
-    mappend (Controller x) (Controller y) = Controller (liftA2 mappend x y)
-
--- | Create a 'Controller' from a 'Managed' 'Producer'
-fromProducer :: Buffer a -> Managed (Producer a IO ()) -> Controller a
-fromProducer buffer mProducer =
-    Controller $ manage $ \k ->
-    with mProducer $ \producer -> do
+-- | Create a 'Managed' 'Controller' from a 'Producer'
+fromProducer
+    :: Buffer a -> Producer a IO () -> Managed (Controller a)
+fromProducer buffer producer =
+    manage $ \k -> do
         (output, input, seal) <- spawn' buffer
         let io = do
                 runEffect $ producer >-> toOutput output
@@ -87,8 +94,8 @@ fromProducer buffer mProducer =
 {-# INLINABLE fromProducer #-}
 
 -- | Create a 'Controller' that emits a single value
-once :: Controller ()
-once = fromProducer Single (pure (yield ()))
+once :: Managed (Controller ())
+once = fromProducer Single (yield ())
 {-# INLINABLE once #-}
 
 {- $view
@@ -98,118 +105,150 @@ once = fromProducer Single (pure (yield ()))
 
 > import Control.Lens (_Left, _Right)
 >
-> viewA :: View A
-> viewB :: View B
+> viewA     :: View A             -- A sink of 'B's
+> viewB     :: View B             -- A sink of 'A's
 >
-> viewTotal :: View (Either A B)
+> viewTotal :: View (Either A B)  -- A sink of either 'A's or 'B's
 > viewTotal = handling _Left viewA <> handling _Right viewB
+>
+> -- Alternatively:
+> --
+> -- viewTotal = mconcat
+> --     [ _Left  <#> viewA
+> --     , _Right <#> viewB
+> --     ]
 
     Use 'Control.Lens.makePrisms' from the @lens@ library to auto-generate
     prisms for your own output event streams.
 -}
 
--- | A 'View' is an 'Output' bundled with resource management logic
-newtype View a = View { runView :: Managed (Output a) }
+-- | A 'View' is a synonym for an 'Output' from @pipes-concurrency@
+type View = Output
 
-instance Monoid (View a) where
-    mempty = View (pure mempty)
-    mappend (View x) (View y) = View (liftA2 mappend x y)
+{-| Pre-map a partial getter to define a partial handler
 
-{-| A contravariant functor that transforms 'Maybe' Kleisli arrows to
-    functions between handlers
-
-    All instances must satisfy the following laws:
-
-> handle return = id
-> handle (f <=< g) = handle g . handle f
+> handles return = id
+>
+> handles (f <=< g) = handles g . handles f
 -}
-class Handler f where
-    -- | Pre-map a partial getter to define a partial handler
-    handle :: (a -> Maybe b) -> f b -> f a
+handles :: (a -> Maybe b) -> View b -> View a
+handles f o = Output $ \a ->
+    case f a of
+        Nothing -> return True
+        Just b  -> send o b
 
-instance Handler Output where
-    handle f o = Output $ \a ->
-        case f a of
-            Nothing -> return True
-            Just b  -> send o b
-
-instance Handler View where
-    handle f v = View (fmap (handle f) (runView v))
-
--- | Create a 'View' from a write action that always succeeds
-fromWrite :: (a -> IO ()) -> View a
-fromWrite handler = View (pure (Output (\a -> True <$ handler a)))
-{-# INLINABLE fromWrite #-}
-
-{-| This is a variation on 'handle' designed to work with prisms auto-generated
+{-| This is a variation on 'handles' designed to work with prisms auto-generated
     by the @lens@ library.  Think of the type as:
 
-> handling :: (Handles f) => Prism' a b -> f b -> f a
+> handling :: APrism' a b -> View b -> View a
 
     @(handling prism action)@ only runs the @action@ if the @prism@ matches the
     @action@'s input, using the prism to transform the input.
 
 > handling id = id
 >
-> handling (p1 . p2) = handling p1 . handling p2
+> handling (p1 . p2) = handling p2 . handling p1
 -}
 handling
-    :: (Handler f)
-    => ((b -> Constant (First b) b) -> (a -> Constant (First b) a))
+    :: ((b -> Constant (First b) b) -> (a -> Constant (First b) a))
     -- ^
-    -> (f b -> f a)
+    -> (View b -> View a)
     -- ^
-handling k = handle (getFirst . getConstant . k (Constant . First . Just))
+handling k = handles (getFirst . getConstant . k (Constant . First . Just))
 {-# INLINABLE handling #-}
 
 -- | An infix synonym for 'handling'
 (<#>)
-    :: (Handler f)
-    => ((b -> Constant (First b) b) -> (a -> Constant (First b) a))
+    :: ((b -> Constant (First b) b) -> (a -> Constant (First b) a))
     -- ^
-    -> (f b -> f a)
+    -> (View b -> View a)
     -- ^
 (<#>) = handling
 {-# INLINABLE (<#>) #-}
 
 infixr 7 <#>
 
-{- $model
-    'Model's are 'ListT' streams enriched with state and they sit in between
-    'Controller's and 'View's.  Connect a 'Model', 'View', and 'Controller'
-    together using 'runMVC' to complete your application.
+-- | Create a 'View' from a write action that always succeeds
+fromWrite :: (a -> IO ()) -> View a
+fromWrite handler = Output (\a -> True <$ handler a)
+{-# INLINABLE fromWrite #-}
 
-    The 'Model' is designed to be entirely pure and concurrency-free so that you
-    can @QuickCheck@ it, equationally reason about its behavior, debug it
-    deterministically, or save and replay old event streams as test cases.
+{- $model
+    'Model's are stateful streams and they sit in between 'Controller's and
+    'View's.  Connect a 'Model', 'View', and 'Controller' together using
+    'runMVC' to complete your application.
+
+    The 'Model' is designed to be pure and concurrency-free so that you can:
+
+    * @QuickCheck@ your model,
+
+    * equationally reason about its behavior, and:
+
+    * replay saved event streams deterministically.
 -}
 
-{-| A @(Model s a b)@ converts each @(a)@ into a stream of @(b)@s while
+{-| A @(Model s a b)@ converts a stream of @(a)@s into a stream of @(b)@s while
     interacting with a state @(s)@
 -}
-type Model s a b = a -> ListT (State s) b
+type Model s a b = Pipe a b (State s) ()
 
-{-| Connect a 'Model', 'View', and 'Controller' into a complete application by
-    providing an initial state
--}
-runMVC :: Controller a -> Model s a b -> View b -> s -> IO ()
-runMVC controller model view initialState =
-    with (runController controller) $ \input  ->
-    with (runView       view      ) $ \output ->
-    flip evalStateT initialState $ runEffect $
-        fromInput input >-> pipe >-> toOutput output
-  where
-    pipe = for cat $ \a -> hoist (hoist generalize) (every (model a))
+-- | Connect a 'Model', 'View', and 'Controller' into a complete application.
+runMVC
+    :: Controller a
+    -- ^ Effectful input
+    -> Model s a b
+    -- ^ Program logic
+    -> View b
+    -- ^ Effectful output
+    -> s
+    -- ^ Initial state
+    -> IO ()
+runMVC input pipe output initialState =
+    flip S.evalStateT initialState $ runEffect $
+        fromInput input >-> hoist (hoist generalize) pipe >-> toOutput output
 {-# INLINABLE runMVC #-}
 
--- | A @(Managed r)@ is a resource @(r)@ bracketed by acquisition and release
-newtype Managed r = Manage
+{-| Convert a 'ListT' transformation to a 'Model'
+
+> fromListT :: (a -> ListT (State s) b) -> Model s a b
+
+> fromListT (k1 >=> k2) = fromListT k1 >-> fromListT k2
+>
+> fromListT return = cat
+-}
+fromListT :: (Monad m) => (a -> ListT m b) -> Pipe a b m ()
+fromListT k = for cat (every . k)
+{-# INLINABLE fromListT #-}
+
+{-| Run an action with read-only state
+
+> readOnly . return = return
+>
+> readOnly . (f >=> g) = (readOnly . f) >=> (readOnly . g)
+-}
+readOnly :: (MFunctor f) => f (Reader s) r -> f (State s) r
+readOnly = hoist _readOnly
+  where
+    _readOnly (R.ReaderT k) = S.StateT $ \s -> do
+        r <- k s
+        return (r, s)
+{-# INLINABLE readOnly #-}
+
+-- | Run an action without access to any state
+stateless :: (MFunctor f) => f Identity r -> f (State s) r
+stateless = hoist _stateless
+  where
+    _stateless (I.Identity r) = return r
+{-# INLINABLE stateless #-}
+
+-- | A @(Managed a)@ is a resource @(a)@ bracketed by acquisition and release
+newtype Managed a = Manage
     { -- | Consume a managed resource
-      with :: forall x . (r -> IO x) -> IO x
+      with :: forall x . (a -> IO x) -> IO x
     }
 
 -- | Build a 'Managed' resource
-manage :: (forall x . (r -> IO x) -> IO x) -> Managed r
+manage :: (forall x . (a -> IO x) -> IO x) -> Managed a
 manage = Manage
 {-# INLINABLE manage #-}
 
@@ -225,7 +264,15 @@ instance Monad Managed where
     m >>= f  = Manage (\k -> with m (\a -> with (f a) k))
 
 {- $reexports
+    "Control.Monad.Trans.State.Strict" re-exports 'StateT' and 'State' (the
+    types only), 'get', 'put', and 'modify'
+
+    "Control.Monad.Trans.Reader" re-exports 'ReaderT' and 'Reader' (the types
+    only), and 'ask'
+
     @Data.Functor.Constant@ re-exports 'Constant' (the type only)
+
+    @Data.Functor.Identity@ re-exports 'Identity' (the type only)
 
     @Data.Monoid@ re-exports 'Monoid', ('<>'), 'mconcat', and 'First'
 
