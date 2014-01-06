@@ -9,6 +9,7 @@ module MVC (
     -- * Controller
     -- $controller
       Controller
+    , (<$>)
     , fromProducer
     , once
 
@@ -25,6 +26,7 @@ module MVC (
     , Model
     , runMVC
     , fromListT
+    , L.zoom
     , readOnly
     , stateless
 
@@ -39,9 +41,10 @@ module MVC (
     , module Control.Monad.Trans.State.Strict
     , module Data.Functor.Constant
     , module Data.Monoid
+    , module Lens.Family
+    , module Lens.Family.State.Strict
     , module Pipes
     , module Pipes.Concurrent
-    , (<$>)
     ) where
 
 import Control.Applicative (Applicative(pure, (<*>)), (<*), (<$>), (<$))
@@ -54,8 +57,11 @@ import qualified Control.Monad.Trans.Reader as R
 import Data.Functor.Constant (Constant(Constant, getConstant))
 import Data.Functor.Identity (Identity)
 import qualified Data.Functor.Identity as I
-import Data.Monoid (
-    Monoid(mempty, mappend, mconcat), (<>), First(First, getFirst) )
+import Data.Monoid (Monoid(mempty, mappend, mconcat), (<>), First)
+import qualified Data.Monoid as M
+import Lens.Family (LensLike')
+import Lens.Family.State.Strict (Zooming)
+import qualified Lens.Family.State.Strict as L
 import Pipes
 import Pipes.Concurrent
 
@@ -154,7 +160,7 @@ handling
     -- ^
     -> (View b -> View a)
     -- ^
-handling k = handles (getFirst . getConstant . k (Constant . First . Just))
+handling k = handles (M.getFirst . getConstant . k (Constant . M.First . Just))
 {-# INLINABLE handling #-}
 
 -- | An infix synonym for 'handling'
@@ -226,19 +232,20 @@ fromListT k = for cat (every . k)
 >
 > readOnly . (f >=> g) = (readOnly . f) >=> (readOnly . g)
 -}
-readOnly :: (MFunctor f) => f (Reader s) r -> f (State s) r
-readOnly = hoist _readOnly
-  where
-    _readOnly (R.ReaderT k) = S.StateT $ \s -> do
-        r <- k s
-        return (r, s)
+readOnly ::Reader s r -> State s r
+readOnly (R.ReaderT k) = S.StateT $ \s -> do
+    r <- k s
+    return (r, s)
 {-# INLINABLE readOnly #-}
 
--- | Run an action without access to any state
-stateless :: (MFunctor f) => f Identity r -> f (State s) r
-stateless = hoist _stateless
-  where
-    _stateless (I.Identity r) = return r
+{-| Run an action without access to any state
+
+> stateless . return = return
+>
+> stateless . (f >=> g) = (stateless . f) >=> (stateless . g)
+-}
+stateless :: Identity r -> State s r
+stateless (I.Identity r) = return r
 {-# INLINABLE stateless #-}
 
 -- | A @(Managed a)@ is a resource @(a)@ bracketed by acquisition and release
@@ -264,17 +271,22 @@ instance Monad Managed where
     m >>= f  = Manage (\k -> with m (\a -> with (f a) k))
 
 {- $reexports
-    "Control.Monad.Trans.State.Strict" re-exports 'StateT' and 'State' (the
-    types only), 'get', 'put', and 'modify'
-
     "Control.Monad.Trans.Reader" re-exports 'ReaderT' and 'Reader' (the types
     only), and 'ask'
 
-    @Data.Functor.Constant@ re-exports 'Constant' (the type only)
+    "Control.Monad.Trans.State.Strict" re-exports 'StateT' and 'State' (the
+    types only), 'get', 'put', and 'modify'
 
-    @Data.Functor.Identity@ re-exports 'Identity' (the type only)
+    "Data.Functor.Constant" re-exports 'Constant' (the type only)
 
-    @Data.Monoid@ re-exports 'Monoid', ('<>'), 'mconcat', and 'First'
+    "Data.Functor.Identity" re-exports 'Identity' (the type only)
+
+    "Data.Monoid" re-exports 'Monoid', ('<>'), 'mconcat', and 'First' (the type
+    only)
+
+    "Lens.Family" re-exports 'LensLike'
+
+    "Lens.Family.State.Strict" re-exports 'Zooming'
 
     All other modules re-export everything
 -}
