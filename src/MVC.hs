@@ -1,6 +1,5 @@
 {-| Use the 'Model' - 'View' - 'Controller' pattern to separate concurrency from
     application logic.
-
 -}
 
 {-# LANGUAGE RankNTypes, FlexibleContexts #-}
@@ -12,7 +11,6 @@ module MVC (
     , (<$>)
     , (<$)
     , fromProducer
-    , once
 
     -- * Views
     -- $view
@@ -99,15 +97,10 @@ fromProducer buffer producer =
         withAsync io $ \_ -> k input <* seal
 {-# INLINABLE fromProducer #-}
 
--- | Create a 'Controller' that emits a single value
-once :: Managed (Controller ())
-once = fromProducer Single (yield ())
-{-# INLINABLE once #-}
-
 {- $view
-    'View's represent outputs of your system.  Use the 'Handler' and 'Monoid'
-    instances of 'View' to combine multiple 'View's together into a single
-    'View' using prisms from the @lens@ library:
+    'View's represent outputs of your system.  Use 'handling' and the 'Monoid'
+    instance of 'View' to combine multiple 'View's together into a single 'View'
+    using prisms from the @lens@ library:
 
 > import Control.Lens (_Left, _Right)
 >
@@ -126,6 +119,8 @@ once = fromProducer Single (yield ())
 
     Use 'Control.Lens.makePrisms' from the @lens@ library to auto-generate
     prisms for your own output event streams.
+
+    If a `lens` dependency is too heavy-weight, then use 'handles' instead.
 -}
 
 -- | A 'View' is a synonym for an 'Output' from @pipes-concurrency@
