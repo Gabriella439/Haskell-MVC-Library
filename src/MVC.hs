@@ -6,22 +6,23 @@
 {-# LANGUAGE RankNTypes, FlexibleContexts #-}
 
 module MVC (
-    -- * Controller
+    -- * Controllers
     -- $controller
       Controller
     , (<$>)
+    , (<$)
     , fromProducer
     , once
 
-    -- * View
+    -- * Views
     -- $view
     , View
     , handles
     , handling
     , (<#>)
-    , fromWrite
+    , fromHandler
 
-    -- * Model
+    -- * Models
     -- $model
     , Model
     , runMVC
@@ -88,8 +89,7 @@ import Pipes.Concurrent
 type Controller = Input
 
 -- | Create a 'Managed' 'Controller' from a 'Producer'
-fromProducer
-    :: Buffer a -> Producer a IO () -> Managed (Controller a)
+fromProducer :: Buffer a -> Producer a IO () -> Managed (Controller a)
 fromProducer buffer producer =
     manage $ \k -> do
         (output, input, seal) <- spawn' buffer
@@ -175,9 +175,9 @@ handling k = handles (M.getFirst . getConstant . k (Constant . M.First . Just))
 infixr 7 <#>
 
 -- | Create a 'View' from a write action that always succeeds
-fromWrite :: (a -> IO ()) -> View a
-fromWrite handler = Output (\a -> True <$ handler a)
-{-# INLINABLE fromWrite #-}
+fromHandler :: (a -> IO ()) -> View a
+fromHandler handler = Output (\a -> True <$ handler a)
+{-# INLINABLE fromHandler #-}
 
 {- $model
     'Model's are stateful streams and they sit in between 'Controller's and
