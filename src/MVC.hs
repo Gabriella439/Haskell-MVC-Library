@@ -26,7 +26,7 @@ module MVC (
     , fromListT
     , L.zoom
     , readOnly
-    , stateless
+    , generalize
 
     -- * Managed Resources
     , Managed
@@ -53,8 +53,6 @@ import qualified Control.Monad.Trans.State.Strict as S
 import Control.Monad.Trans.Reader (ReaderT, Reader, ask)
 import qualified Control.Monad.Trans.Reader as R
 import Data.Functor.Constant (Constant(Constant, getConstant))
-import Data.Functor.Identity (Identity)
-import qualified Data.Functor.Identity as I
 import Data.Monoid (Monoid(mempty, mappend, mconcat), (<>), First)
 import qualified Data.Monoid as M
 import Lens.Family (LensLike')
@@ -235,16 +233,6 @@ readOnly (R.ReaderT k) = S.StateT $ \s -> do
     r <- k s
     return (r, s)
 {-# INLINABLE readOnly #-}
-
-{-| Run an action without access to any state
-
-> stateless . return = return
->
-> stateless . (f >=> g) = (stateless . f) >=> (stateless . g)
--}
-stateless :: Identity r -> State s r
-stateless (I.Identity r) = return r
-{-# INLINABLE stateless #-}
 
 -- | A @(Managed a)@ is a resource @(a)@ bracketed by acquisition and release
 newtype Managed a = Manage
