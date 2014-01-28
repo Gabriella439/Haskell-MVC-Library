@@ -228,7 +228,7 @@ fromListT k = for cat (every . k)
 >
 > readOnly . (f >=> g) = (readOnly . f) >=> (readOnly . g)
 -}
-readOnly ::Reader s r -> State s r
+readOnly :: Monad m => ReaderT s m r -> StateT s m r
 readOnly (R.ReaderT k) = S.StateT $ \s -> do
     r <- k s
     return (r, s)
