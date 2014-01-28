@@ -14,11 +14,10 @@ module MVC (
 
     -- * Views
     -- $view
-    , View
+    , View(..)
     , handles
     , handling
     , (<#>)
-    , fromHandler
 
     -- * Models
     -- $model
@@ -93,8 +92,8 @@ fromProducer buffer producer =
         (output, input, seal) <- spawn' buffer
         let io = do
                 runEffect $ producer >-> toOutput output
-                seal
-        withAsync io $ \_ -> k input <* seal
+                atomically seal
+        withAsync io $ \_ -> k input <* atomically seal
 {-# INLINABLE fromProducer #-}
 
 {- $view
@@ -123,8 +122,16 @@ fromProducer buffer producer =
     If a `lens` dependency is too heavy-weight, then use 'handles' instead.
 -}
 
--- | A 'View' is a synonym for an 'Output' from @pipes-concurrency@
-type View = Output
+{-| A 'View' is an 'IO'-based handler
+
+    'View's resemble 'Output's from @pipes-concurrency@, except that they run in
+    'IO' instead of 'STM'
+-}
+newtype View a = View { sendIO :: a -> IO () }
+
+instance Monoid (View a) where
+    mempty = View (\_ -> return ())
+    mappend v1 v2 = View (\a -> sendIO v1 a >> sendIO v2 a)
 
 {-| Pre-map a partial getter to define a partial handler
 
@@ -133,10 +140,9 @@ type View = Output
 > handles (f <=< g) = handles g . handles f
 -}
 handles :: (a -> Maybe b) -> View b -> View a
-handles f o = Output $ \a ->
-    case f a of
-        Nothing -> return True
-        Just b  -> send o b
+handles f o = View $ \a -> case f a of
+    Nothing -> return ()
+    Just b  -> sendIO o b
 
 {-| This is a variation on 'handles' designed to work with prisms auto-generated
     by the @lens@ library.  Think of the type as:
@@ -169,11 +175,6 @@ handling k = handles (M.getFirst . getConstant . k (Constant . M.First . Just))
 
 infixr 7 <#>
 
--- | Create a 'View' from a write action that always succeeds
-fromHandler :: (a -> IO ()) -> View a
-fromHandler handler = Output (\a -> True <$ handler a)
-{-# INLINABLE fromHandler #-}
-
 {- $model
     'Model's are stateful streams and they sit in between 'Controller's and
     'View's.  Connect a 'Model', 'View', and 'Controller' together using
@@ -204,9 +205,11 @@ runMVC
     -> s
     -- ^ Initial state
     -> IO ()
-runMVC input pipe output initialState =
+runMVC controller model view initialState =
     flip S.evalStateT initialState $ runEffect $
-        fromInput input >-> hoist (hoist generalize) pipe >-> toOutput output
+            fromInput controller
+        >-> hoist (hoist generalize) model
+        >-> for cat (liftIO . sendIO view)
 {-# INLINABLE runMVC #-}
 
 {-| Convert a 'ListT' transformation to a 'Model'
