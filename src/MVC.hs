@@ -8,128 +8,137 @@ module MVC (
     -- * Controllers
     -- $controller
       Controller
-    , (<$>)
-    , (<$)
-    , fromProducer
+    , buffered
+    , controller
 
     -- * Views
     -- $view
-    , View(..)
+    , View
     , handles
     , handling
-    , (<#>)
+    , sink
+    , view
 
     -- * Models
     -- $model
     , Model
     , runMVC
-    , fromListT
-    , L.zoom
-    , readOnly
-    , generalize
-
-    -- * Managed Resources
-    , Managed
-    , with
-    , manage
+    , listT
 
     -- * Re-exports
     -- $reexports
-    , module Control.Monad.Trans.Reader
-    , module Control.Monad.Trans.State.Strict
     , module Data.Functor.Constant
     , module Data.Monoid
-    , module Lens.Family
-    , module Lens.Family.State.Strict
     , module Pipes
     , module Pipes.Concurrent
     ) where
 
-import Control.Applicative (Applicative(pure, (<*>)), (<*), (<$>), (<$))
+import Control.Applicative (pure, liftA2, (<*))
 import Control.Concurrent.Async (withAsync)
 import Control.Monad.Morph (generalize)
-import Control.Monad.Trans.State.Strict (StateT, State, get, put, modify)
-import qualified Control.Monad.Trans.State.Strict as S
-import Control.Monad.Trans.Reader (ReaderT, Reader, ask)
-import qualified Control.Monad.Trans.Reader as R
+import Control.Monad.Trans.State.Strict (State, execStateT)
+import Control.Monad.Trans.Cont (ContT(ContT, runContT))
 import Data.Functor.Constant (Constant(Constant, getConstant))
 import Data.Monoid (Monoid(mempty, mappend, mconcat), (<>), First)
 import qualified Data.Monoid as M
-import Lens.Family (LensLike')
-import Lens.Family.State.Strict (Zooming)
-import qualified Lens.Family.State.Strict as L
 import Pipes
 import Pipes.Concurrent
+import qualified System.IO as IO
 
 {- $controller
     'Controller's represent concurrent inputs to your system.  Use the 'Functor'
     and 'Monoid' instances of 'Controller' to bundle multiple 'Controller's
     together:
 
-> controllerA     :: Controller A             -- A source of 'A's
-> controllerB     :: Controller B             -- A source of 'B's
+> controllerA :: Controller A
+> controllerB :: Controller B
+> controllerC :: Controller C
 >
-> controllerTotal :: Controller (Either A B)  -- A source of either 'A's or 'B's
-> controllerTotal = fmap Left controllerA <> fmap Right controllerB
+> data TotalInput = InA A | InB B | InC C
 >
-> -- Alternatively:
-> --
-> -- controllerTotal = mconcat
-> --     [ Left  <$> controllerA
-> --     , Right <$> controllerB
-> --     ]
+> controllerTotal :: Controller TotalInput
+> controllerTotal =
+>         fmap InA controllerA
+>     <>  fmap InB controllerB
+>     <>  fmap InC controllerC
 -}
 
--- | A 'Controller' is a synonym for an 'Input' from @pipes-concurrency@
-type Controller = Input
+newtype Controller a = Controller (forall x . ContT x IO (Input a))
 
--- | Create a 'Managed' 'Controller' from a 'Producer'
-fromProducer :: Buffer a -> Producer a IO () -> Managed (Controller a)
-fromProducer buffer producer =
-    manage $ \k -> do
+instance Functor Controller where
+    fmap f (Controller c) = Controller (fmap (fmap f) c)
+
+instance Monoid (Controller a) where
+    mempty = Controller (pure mempty)
+    mappend (Controller c1) (Controller c2) = Controller (liftA2 mappend c1 c2)
+
+-- | Create a 'Controller' from a 'Buffer'ed 'Producer'
+buffered :: Buffer a -> Producer a IO () -> Controller a
+buffered buffer producer =
+    controller $ \k -> do
         (output, input, seal) <- spawn' buffer
         let io = do
                 runEffect $ producer >-> toOutput output
                 atomically seal
         withAsync io $ \_ -> k input <* atomically seal
-{-# INLINABLE fromProducer #-}
+{-# INLINABLE buffered #-}
+
+{-| Create a 'Controller' from a managed 'Input'
+
+    This is the most general way to create a 'Controller'
+-}
+controller :: (forall x . (Input a -> IO x) -> IO x) -> Controller a
+controller k = Controller (ContT k)
+{-# INLINABLE controller #-}
+
+{-
+record :: Binary a => FilePath -> Controller a -> Controller a
+record filePath =
+    Controller $ ContT $ \send ->
+    withFile filePath IO.WriteMode $ \handle -> k $ \a -> do
+-}
 
 {- $view
     'View's represent outputs of your system.  Use 'handling' and the 'Monoid'
     instance of 'View' to combine multiple 'View's together into a single 'View'
-    using prisms from the @lens@ library:
+    using prisms:
 
-> import Control.Lens (_Left, _Right)
+> viewD :: View D
+> viewE :: View E
+> viewF :: View F
 >
-> viewA     :: View A             -- A sink of 'B's
-> viewB     :: View B             -- A sink of 'A's
+> data TotalOutput = OutD D | OutE E | OutF F
 >
-> viewTotal :: View (Either A B)  -- A sink of either 'A's or 'B's
-> viewTotal = handling _Left viewA <> handling _Right viewB
+> makePrisms ''TotalOutput  -- Generates _OutD, _OutE, and _OutF prisms
 >
-> -- Alternatively:
-> --
-> -- viewTotal = mconcat
-> --     [ _Left  <#> viewA
-> --     , _Right <#> viewB
-> --     ]
+> viewTotal :: View TotalOutput
+> viewTotal =
+>         handling _OutD viewD
+>     <>  handling _OutE viewE
+>     <>  handling _OutF viewF
 
-    Use 'Control.Lens.makePrisms' from the @lens@ library to auto-generate
-    prisms for your own output event streams.
-
-    If a `lens` dependency is too heavy-weight, then use 'handles' instead.
+    If a @lens@ dependency is too heavy-weight, then use the 'handles' function
+    instead.
 -}
 
-{-| A 'View' is an 'IO'-based handler
+newtype Action = Action { runAction :: IO () }
 
-    'View's resemble 'Output's from @pipes-concurrency@, except that they run in
-    'IO' instead of 'STM'
--}
-newtype View a = View { sendIO :: a -> IO () }
+instance Monoid Action where
+    mempty = Action (return ())
+    mappend (Action io1) (Action io2) = Action (io1 >> io2)
+
+newtype Sink a = Sink (a -> Action)
+
+instance Monoid (Sink a) where
+    mempty = Sink (pure mempty)
+    mappend (Sink write1) (Sink write2) = Sink (liftA2 mappend write1 write2)
+
+-- | A managed sink
+newtype View a = View (forall x . ContT x IO (Sink a))
 
 instance Monoid (View a) where
-    mempty = View (\_ -> return ())
-    mappend v1 v2 = View (\a -> sendIO v1 a >> sendIO v2 a)
+    mempty = View (pure mempty)
+    mappend (View c1) (View c2) = View (liftA2 mappend c1 c2)
 
 {-| Pre-map a partial getter to define a partial handler
 
@@ -138,14 +147,18 @@ instance Monoid (View a) where
 > handles (f <=< g) = handles g . handles f
 -}
 handles :: (a -> Maybe b) -> View b -> View a
-handles f o = View $ \a -> case f a of
-    Nothing -> return ()
-    Just b  -> sendIO o b
+handles f (View c) = View (fmap onJust c)
+  where
+    onJust (Sink send_) = Sink (\a -> case f a of
+        Nothing -> mempty
+        Just b  -> send_ b )
+{-# INLINABLE handles #-}
 
 {-| This is a variation on 'handles' designed to work with prisms auto-generated
-    by the @lens@ library.  Think of the type as:
+    by the @lens@ library.  Think of the type as one of the following types:
 
-> handling :: APrism' a b -> View b -> View a
+> handling :: Prism'     a b -> View b -> View a
+> handling :: Traversal' a b -> View b -> View a
 
     @(handling prism action)@ only runs the @action@ if the @prism@ matches the
     @action@'s input, using the prism to transform the input.
@@ -162,21 +175,22 @@ handling
 handling k = handles (M.getFirst . getConstant . k (Constant . M.First . Just))
 {-# INLINABLE handling #-}
 
--- | An infix synonym for 'handling'
-(<#>)
-    :: ((b -> Constant (First b) b) -> (a -> Constant (First b) a))
-    -- ^
-    -> (View b -> View a)
-    -- ^
-(<#>) = handling
-{-# INLINABLE (<#>) #-}
+-- | Convert a sink to a 'View'
+sink :: (a -> IO ()) -> View a
+sink handler = view (\k -> k handler)
+{-# INLINABLE sink #-}
 
-infixr 7 <#>
+{-| Convert a managed sink to a 'View'
+
+    This is the most general way to create a 'View'
+-}
+view :: (forall x . ((a -> IO ()) -> IO x) -> IO x) -> View a
+view k = View (fmap (\f -> Sink (\a -> Action (f a))) (ContT k))
 
 {- $model
     'Model's are stateful streams and they sit in between 'Controller's and
-    'View's.  Connect a 'Model', 'View', and 'Controller' together using
-    'runMVC' to complete your application.
+    'View's.  Connect a 'Model', 'View', and 'Controller' and an initial state
+    together using 'runMVC' to complete your application.
 
     The 'Model' is designed to be pure and concurrency-free so that you can:
 
@@ -185,6 +199,79 @@ infixr 7 <#>
     * equationally reason about its behavior, and:
 
     * replay saved event streams deterministically.
+
+    Here are some example ways to decompose your model into sub-models:
+
+> -- Independent sub-models
+>
+> modelAToD :: A -> ListT (State S) D
+> modelBToE :: B -> ListT (State S) E
+> modelCToF :: C -> ListT (State s) F
+>
+> modelInToOut :: TotalInput -> ListT (State S) TotalOutput
+> modelInToOut totalInput = case totalInput of
+>     InA a -> fmap OutD (modelAToD a)
+>     InB b -> fmap OutE (modelAToD b)
+>     InC c -> fmap OutF (modelAToD c)
+>
+> model :: Pipe TotalInput TotalOutput (State S) r
+> model = listT modelInToOut
+
+> -- Overlapping outputs
+>
+> modelAToOut :: A -> ListT (State S) Out
+> modelBToOut :: B -> ListT (State S) Out
+> modelCToOut :: C -> ListT (State S) Out
+>
+> modelInToOut :: TotalInput -> ListT (State S) TotalOutput
+> modelInToOut totalInput = case totalInput of
+>     InA a -> modelAToOut a
+>     InB b -> modelBToOut b
+>     InC c -> modelBToOut b
+>
+> model :: Pipe TotalInput TotalOutput (State S) r
+> model = listT modelInToOut
+
+> -- Overlapping inputs
+>
+> modelInToA :: TotalInput -> ListT (State S) A
+> modelInToB :: TotalInput -> ListT (State S) B
+> modelInToC :: TotalInput -> ListT (State S) C
+>
+> modelInToOut :: TotalInput -> ListT (State S) TotalOutput
+> modelInToOut totalInput =
+>        fmap OutA (modelInToA totalInput)
+>     <> fmap OutB (modelInToB totalInput)
+>     <> fmap OutC (modelInToC totalInput)
+>
+> model :: Pipe TotalInput TotalOutput (State S) r
+> model = listT modelInToOut
+
+> -- End-to-end
+>
+> modelInToMiddle  :: TotalInput -> ListT (State S) MiddleStep
+> modelMiddleToOut :: MiddleStep -> ListT (State S) TotalOutput
+>
+> modelInToOut :: TotalInput -> ListT (State S) TotalOutput
+> modelInToOut = modelInToMiddle >=> modelMiddleToOut
+>
+> model :: Pipe TotalInput TotalOutput (State S) r
+> model = listT modelInToOut
+
+> -- Mix ListT with Pipes to terminate on a given input
+>
+> quitOnC :: Monad m => Pipe TotalInput TotalInput m ()
+> quitOnC = do
+>     totalInput <- await
+>     case totalInput of
+>         C -> return ()
+>         _ -> do
+>             yield totalInput
+>             quitOnC
+>
+> model :: Pipe TotalInput TotalOutput (State S) ()
+> model = quitOnC >-> listT modelInToOut
+
 -}
 
 {-| A @(Model s a b)@ converts a stream of @(a)@s into a stream of @(b)@s while
@@ -192,7 +279,9 @@ infixr 7 <#>
 -}
 type Model s a b = Pipe a b (State s) ()
 
--- | Connect a 'Model', 'View', and 'Controller' into a complete application.
+{-| Connect a 'Model', 'View', and 'Controller' and initial state into a
+    complete application.
+-}
 runMVC
     :: Controller a
     -- ^ Effectful input
@@ -202,77 +291,34 @@ runMVC
     -- ^ Effectful output
     -> s
     -- ^ Initial state
-    -> IO ()
-runMVC controller model view initialState =
-    flip S.evalStateT initialState $ runEffect $
-            fromInput controller
+    -> IO s
+runMVC (Controller c) model (View v) initialState =
+    runContT c $ \input ->
+    runContT v $ \(Sink send_)  ->
+    flip execStateT initialState $ runEffect $
+            fromInput input
         >-> hoist (hoist generalize) model
-        >-> for cat (liftIO . sendIO view)
+        >-> for cat (\a -> liftIO (runAction (send_ a)))
 {-# INLINABLE runMVC #-}
 
-{-| Convert a 'ListT' transformation to a 'Model'
+{-| Convert a 'ListT' transformation to a 'Pipe'
 
-> fromListT :: (a -> ListT (State s) b) -> Model s a b
-
-> fromListT (k1 >=> k2) = fromListT k1 >-> fromListT k2
+> listT (k1 >=> k2) = listT k1 >-> listT k2
 >
-> fromListT return = cat
+> listT return = cat
+
 -}
-fromListT :: (Monad m) => (a -> ListT m b) -> Pipe a b m ()
-fromListT k = for cat (every . k)
-{-# INLINABLE fromListT #-}
-
-{-| Run an action with read-only state
-
-> readOnly . return = return
->
-> readOnly . (f >=> g) = (readOnly . f) >=> (readOnly . g)
--}
-readOnly :: Monad m => ReaderT s m r -> StateT s m r
-readOnly (R.ReaderT k) = S.StateT $ \s -> do
-    r <- k s
-    return (r, s)
-{-# INLINABLE readOnly #-}
-
--- | A @(Managed a)@ is a resource @(a)@ bracketed by acquisition and release
-newtype Managed a = Manage
-    { -- | Consume a managed resource
-      with :: forall x . (a -> IO x) -> IO x
-    }
-
--- | Build a 'Managed' resource
-manage :: (forall x . (a -> IO x) -> IO x) -> Managed a
-manage = Manage
-{-# INLINABLE manage #-}
-
-instance Functor Managed where
-    fmap f m = Manage (\k -> with m (\r -> k (f r)))
-
-instance Applicative Managed where
-    pure a    = Manage (\k -> k a)
-    mf <*> mx = Manage (\k -> with mf (\f -> with mx (\x -> k (f x))))
-
-instance Monad Managed where
-    return a = Manage (\k -> k a)
-    m >>= f  = Manage (\k -> with m (\a -> with (f a) k))
+listT :: Monad m => (a -> ListT m b) -> Pipe a b m r
+listT k = for cat (every . k)
+{-# INLINABLE listT #-}
 
 {- $reexports
-    "Control.Monad.Trans.Reader" re-exports 'ReaderT' and 'Reader' (the types
-    only), and 'ask'
-
-    "Control.Monad.Trans.State.Strict" re-exports 'StateT' and 'State' (the
-    types only), 'get', 'put', and 'modify'
-
     "Data.Functor.Constant" re-exports 'Constant' (the type only)
-
-    "Data.Functor.Identity" re-exports 'Identity' (the type only)
 
     "Data.Monoid" re-exports 'Monoid', ('<>'), 'mconcat', and 'First' (the type
     only)
 
-    "Lens.Family" re-exports 'LensLike'
+    "Pipes" re-exports everything
 
-    "Lens.Family.State.Strict" re-exports 'Zooming'
-
-    All other modules re-export everything
+    "Pipes.Concurrent" re-exports everything
 -}
