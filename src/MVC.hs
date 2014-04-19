@@ -86,7 +86,10 @@ instance Monoid (Controller a) where
     mempty = Controller (pure mempty)
     mappend (Controller c1) (Controller c2) = Controller (liftA2 mappend c1 c2)
 
--- | Create a 'Controller' from a 'Producer', using the given 'Buffer'
+{-| Create a 'Controller' from a 'Producer', using the given 'Buffer'
+
+    If you're not sure what 'Buffer' to use, try 'Single'
+-}
 producer :: Buffer a -> Producer a IO () -> Controller a
 producer buffer prod =
     managedInput $ \k -> do
@@ -97,17 +100,10 @@ producer buffer prod =
         withAsync io $ \_ -> k input <* atomically seal
 {-# INLINABLE producer #-}
 
--- | Emit a values spaced by a delay in seconds
-tick :: Double -> Controller ()
-tick n = producer Unbounded $ lift (threadDelay (truncate (n * 1000000))) >~ cat
-{-# INLINABLE tick #-}
+{-| Create a 'Controller' from a managed 'Producer', using the given 'Buffer'
 
--- | Read lines from standard input
-stdinLn :: Controller String
-stdinLn = producer Unbounded Pipes.stdinLn
-{-# INLINABLE stdinLn #-}
-
--- | Create a 'Controller' from a managed 'Producer', using the given 'Buffer'
+    If you're not sure what 'Buffer' to use, try 'Single'
+-}
 managedProducer
     :: Buffer a
     -> (forall x . (Producer a IO () -> IO x) -> IO x)
@@ -126,12 +122,15 @@ managedInput :: (forall x . (Input a -> IO x) -> IO x) -> Controller a
 managedInput k = Controller (ContT k)
 {-# INLINABLE managedInput #-}
 
-{-
-record :: Binary a => FilePath -> Controller a -> Controller a
-record filePath =
-    Controller $ ContT $ \send ->
-    withFile filePath IO.WriteMode $ \handle -> k $ \a -> do
--}
+-- | Emit a values spaced by a delay in seconds
+tick :: Double -> Controller ()
+tick n = producer Unbounded $ lift (threadDelay (truncate (n * 1000000))) >~ cat
+{-# INLINABLE tick #-}
+
+-- | Read lines from standard input
+stdinLn :: Controller String
+stdinLn = producer Unbounded Pipes.stdinLn
+{-# INLINABLE stdinLn #-}
 
 {- $view
     'View's represent outputs of your system.  Use 'handling' and the 'Monoid'
