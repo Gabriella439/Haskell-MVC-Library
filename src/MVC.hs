@@ -2,33 +2,41 @@
     and outputs from pure application logic.
 -}
 
-{-# LANGUAGE RankNTypes, FlexibleContexts #-}
+{-# LANGUAGE RankNTypes, GeneralizedNewtypeDeriving #-}
 
 module MVC (
     -- * Controllers
     -- $controller
       Controller
     , producer
-    , managedProducer
-    , managedInput
-    , tick
-    , stdinLn
+    , input
 
     -- * Views
     -- $view
     , View
     , handles
-    , handling
     , sink
-    , managedSink
-    , stdoutLn
 
     -- * Models
     -- $model
     , Model
     , runMVC
+
+    -- * Utilities
+    -- $utilities
+    , view
+    , controller
     , listT
     -- $listT
+
+    -- * Managed Resources
+    , Managed
+    , managed
+
+    -- * Examples
+    , stdinLn
+    , tick
+    , stdoutLn
 
     -- * Re-exports
     -- $reexports
@@ -39,12 +47,11 @@ module MVC (
     , module Pipes.Concurrent
     ) where
 
-import Control.Applicative (pure, liftA2, (<*))
+import Control.Applicative (Applicative(pure, (<*>)), liftA2, (<*))
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (withAsync)
 import Control.Monad.Morph (generalize)
 import Control.Monad.Trans.State.Strict (State, execStateT)
-import Control.Monad.Trans.Cont (ContT(ContT, runContT))
 import Data.Functor.Constant (Constant(Constant, getConstant))
 import Data.Functor.Contravariant (Contravariant(contramap))
 import Data.Monoid (Monoid(mempty, mappend, mconcat), (<>), First)
@@ -55,193 +62,142 @@ import qualified Pipes.Prelude as Pipes
 
 {- $controller
     'Controller's represent concurrent inputs to your system.  Use the 'Functor'
-    and 'Monoid' instances of 'Controller' to bundle multiple 'Controller's
-    together:
+    and 'Monoid' instances of 'Controller' to unify multiple 'Controller's
+    together into a single 'Controller':
 
-> controllerA :: Controller A
-> controllerB :: Controller B
-> controllerC :: Controller C
+> controllerA :: Managed (Controller A)
+> controllerB :: Managed (Controller B)
+> controllerC :: Managed (Controller C)
 >
 > data TotalInput = InA A | InB B | InC C
 >
-> controllerTotal :: Controller TotalInput
+> controllerTotal :: Managed (Controller TotalInput)
 > controllerTotal =
->         fmap InA controllerA
->     <>  fmap InB controllerB
->     <>  fmap InC controllerC
+>         fmap (fmap InA) controllerA
+>     <>  fmap (fmap InB) controllerB
+>     <>  fmap (fmap InC) controllerC
 -}
 
-{-| A managed, concurrent input
+{-| A concurrent source
 
 > fmap f (c1 <> c2) = fmap f c1 <> fmap f c2
 >
 > fmap f mempty = mempty
 -}
-newtype Controller a = Controller (forall x . ContT x IO (Input a))
-
-instance Functor Controller where
-    fmap f (Controller c) = Controller (fmap (fmap f) c)
-
-instance Monoid (Controller a) where
-    mempty = Controller (pure mempty)
-    mappend (Controller c1) (Controller c2) = Controller (liftA2 mappend c1 c2)
+newtype Controller a = Controller (Input a) deriving (Functor, Monoid)
+-- This is just a newtype wrapper around `Input` because:
+--
+-- * I want the `Controller` name to "stick" in inferred types
+--
+-- * I want to restrict the API to ensure that `runMVC` is the only way to
+--   consume `Controller`s.  This enforces strict separation of `Controller`
+--   logic from `Model` or `View` logic
 
 {-| Create a 'Controller' from a 'Producer', using the given 'Buffer'
 
     If you're not sure what 'Buffer' to use, try 'Single'
 -}
-producer :: Buffer a -> Producer a IO () -> Controller a
-producer buffer prod =
-    managedInput $ \k -> do
-        (output, input, seal) <- spawn' buffer
-        let io = do
-                runEffect $ prod >-> toOutput output
-                atomically seal
-        withAsync io $ \_ -> k input <* atomically seal
+producer :: Buffer a -> Producer a IO () -> Managed (Controller a)
+producer buffer prod = managed $ \k -> do
+    (o, i, seal) <- spawn' buffer
+    let io = do
+            runEffect $ prod >-> toOutput o
+            atomically seal
+    withAsync io $ \_ -> k (input i) <* atomically seal
 {-# INLINABLE producer #-}
 
-{-| Create a 'Controller' from a managed 'Producer', using the given 'Buffer'
-
-    If you're not sure what 'Buffer' to use, try 'Single'
--}
-managedProducer
-    :: Buffer a
-    -> (forall x . (Producer a IO () -> IO x) -> IO x)
-    -> Controller a
-managedProducer buffer withProducer =
-    managedInput $ \k -> do
-    withProducer $ \prod -> do
-        (output, input, seal) <- spawn' buffer
-        let io = do
-                runEffect $ prod >-> toOutput output
-                atomically seal
-        withAsync io $ \_ -> k input <* atomically seal
-
--- | Create a 'Controller' from a managed 'Input'
-managedInput :: (forall x . (Input a -> IO x) -> IO x) -> Controller a
-managedInput k = Controller (ContT k)
-{-# INLINABLE managedInput #-}
-
--- | Emit a values spaced by a delay in seconds
-tick :: Double -> Controller ()
-tick n = producer Unbounded $ lift (threadDelay (truncate (n * 1000000))) >~ cat
-{-# INLINABLE tick #-}
-
--- | Read lines from standard input
-stdinLn :: Controller String
-stdinLn = producer Unbounded Pipes.stdinLn
-{-# INLINABLE stdinLn #-}
+-- | Create a 'Controller' from an 'Input'
+input :: Input a -> Controller a
+input = Controller
+{-# INLINABLE input #-}
 
 {- $view
-    'View's represent outputs of your system.  Use 'handling' and the 'Monoid'
-    instance of 'View' to combine multiple 'View's together into a single 'View'
-    using prisms:
+    'View's represent outputs of your system.  Use 'handles' and the 'Monoid'
+    instance of 'View' to unify multiple 'View's together into a single 'View':
 
-> viewD :: View D
-> viewE :: View E
-> viewF :: View F
+> viewD :: Managed (View D)
+> viewE :: Managed (View E)
+> viewF :: Managed (View F)
 >
 > data TotalOutput = OutD D | OutE E | OutF F
 >
 > makePrisms ''TotalOutput  -- Generates _OutD, _OutE, and _OutF prisms
 >
-> viewTotal :: View TotalOutput
+> viewTotal :: Managed (View TotalOutput)
 > viewTotal =
->         handling _OutD viewD
->     <>  handling _OutE viewE
->     <>  handling _OutF viewF
+>         fmap (handles _OutD) viewD
+>     <>  fmap (handles _OutE) viewE
+>     <>  fmap (handles _OutF) viewF
 
-    If a @lens@ dependency is too heavy-weight, then use the 'handles' function
-    instead.
+    If a @lens@ dependency is too heavy-weight, then you can manually generate
+    'Traversal's by hand, which 'handles' also accepts.  Here is an example of
+    how you would do that:
+
+> -- _OutD :: Traversal' TotalOutput D
+> _OutD :: Applicative f => (D -> f D) -> (TotalOutput -> f TotalOutput)
+> _OutD k (OutD d) = fmap OutD (k d)
+> _OutD k  t       = pure t
+>
+> -- _OutE :: Traversal' TotalOutput E
+> _OutE :: Applicative f => (E -> f E) -> (TotalOutput -> f TotalOutput)
+> _OutE k (OutE d) = fmap OutE (k d)
+> _OutE k  t       = pure t
+>
+> -- _OutF :: Traversal' TotalOutput F
+> _OutF :: Applicative f => (F -> f F) -> (TotalOutput -> f TotalOutput)
+> _OutF k (OutF d) = fmap OutF (k d)
+> _OutF k  t       = pure t
+
+    instead.  Or you can manually
 -}
 
-newtype Action = Action { runAction :: IO () }
-
-instance Monoid Action where
-    mempty = Action (return ())
-    mappend (Action io1) (Action io2) = Action (io1 >> io2)
-
-newtype Sink a = Sink (a -> Action)
-
-instance Monoid (Sink a) where
-    mempty = Sink (pure mempty)
-    mappend (Sink write1) (Sink write2) = Sink (liftA2 mappend write1 write2)
-
-instance Contravariant Sink where
-    contramap f (Sink k) = Sink (k . f)
-
-{-| A managed sink
+{-| An effectful sink
 
 > contramap f (v1 <> v2) = contramap f v1 <> contramap f v2
 >
-> contramap f mempty  mempty
+> contramap f mempty = mempty
 -}
-newtype View a = View (forall x . ContT x IO (Sink a))
+newtype View a = View (a -> IO ())
 
 instance Monoid (View a) where
-    mempty = View (pure mempty)
-    mappend (View c1) (View c2) = View (liftA2 mappend c1 c2)
+    mempty = View (\_ -> return ())
+    mappend (View write1) (View write2) = View (\a -> write1 a >> write2 a)
 
 instance Contravariant View where
-    contramap f (View c) = View (fmap (contramap f) c)
+    contramap f (View k) = View (k . f)
 
-{-| Pre-map a partial getter to define a partial handler
+{-| Think of the type as one of the following types:
 
-> handles (f <=< g) = handles g . handles f
+> handles :: Prism'     a b -> View b -> View a
+> handles :: Traversal' a b -> View b -> View a
+
+    @(handles prism action)@ only runs the @action@ if the @prism@ matches the
+    @action@'s input.
+
+> handles (p1 . p2) = handles p2 . handles p1
 >
-> handles return = id
+> handles id = id
 
 > handles f (v1 <> v2) = handles f v1 <> handles f v2
 >
 > handles f mempty = mempty
 -}
-handles :: (a -> Maybe b) -> View b -> View a
-handles f (View c) = View (fmap onJust c)
-  where
-    onJust (Sink send_) = Sink (\a -> case f a of
-        Nothing -> mempty
-        Just b  -> send_ b )
-{-# INLINABLE handles #-}
-
-{-| This is a variation on 'handles' designed to work with prisms auto-generated
-    by the @lens@ library.  Think of the type as one of the following types:
-
-> handling :: Prism'     a b -> View b -> View a
-> handling :: Traversal' a b -> View b -> View a
-
-    @(handling prism action)@ only runs the @action@ if the @prism@ matches the
-    @action@'s input, using the prism to transform the input.
-
-> handling (p1 . p2) = handling p2 . handling p1
->
-> handling id = id
-
-> handling f (v1 <> v2) = handling f v1 <> handling f v2
->
-> handling f mempty = mempty
--}
-handling
+handles
     :: ((b -> Constant (First b) b) -> (a -> Constant (First b) a))
     -- ^
     -> (View b -> View a)
     -- ^
-handling k = handles (M.getFirst . getConstant . k (Constant . M.First . Just))
-{-# INLINABLE handling #-}
+handles k (View send_) = View (\a -> case match a of
+    Nothing -> return ()
+    Just b  -> send_ b )
+  where
+    match = M.getFirst . getConstant . k (Constant . M.First . Just)
+{-# INLINABLE handles #-}
 
 -- | Convert a sink to a 'View'
 sink :: (a -> IO ()) -> View a
-sink handler = managedSink (\k -> k handler)
+sink = View
 {-# INLINABLE sink #-}
-
--- | Convert a managed sink to a 'View'
-managedSink :: (forall x . ((a -> IO ()) -> IO x) -> IO x) -> View a
-managedSink k = View (fmap (\f -> Sink (\a -> Action (f a))) (ContT k))
-{-# INLINABLE managedSink #-}
-
--- | Write lines to standard output
-stdoutLn :: View String
-stdoutLn = sink putStrLn
-{-# INLINABLE stdoutLn #-}
 
 {- $model
     'Model's are stateful streams and they sit in between 'Controller's and
@@ -260,6 +216,10 @@ stdoutLn = sink putStrLn
     Use 'State' to internally communicate within the 'Model'.  If you don't
     think you need it, you can enable hard mode by wrapping your model with
     @(hoist generalize)@.
+
+    'runMVC' is the only way to consume 'View's and 'Controller's.  The types
+    forbid you from mixing 'View' and 'Controller' logic with your 'Model'
+    logic.
 -}
 
 {-| A @(Model s a b)@ converts a stream of @(a)@s into a stream of @(b)@s while
@@ -271,23 +231,48 @@ type Model s a b = Pipe a b (State s) ()
     complete application.
 -}
 runMVC
-    :: Controller a
-    -- ^ Effectful input
-    -> Model s a b
+    :: Model s a b
     -- ^ Program logic
-    -> View b
-    -- ^ Effectful output
+    -> Managed (View b, Controller a)
+    -- ^ Effectful output and input
     -> s
     -- ^ Initial state
     -> IO s
-runMVC (Controller c) model (View v) initialState =
-    runContT c $ \input ->
-    runContT v $ \(Sink send_)  ->
+runMVC model viewController initialState =
+    _bind viewController $ \(View send_, Controller input_) ->
     flip execStateT initialState $ runEffect $
-            fromInput input
+            fromInput input_
         >-> hoist (hoist generalize) model
-        >-> for cat (\a -> liftIO (runAction (send_ a)))
+        >-> for cat (liftIO . send_)
 {-# INLINABLE runMVC #-}
+
+{- $utilities
+    Use 'view' and 'controller' to mix 'View's and 'Controller's using
+    'Monoid' syntax:
+
+> viewControllerTotal :: Managed (View TotalOutput, Controller TotalInput)
+> viewControllerTotal = fmap view viewTotal <> fmap controller controllerTotal
+-}
+
+{-| Generalize a 'View' to a 'View' and 'Controller'
+
+> view (v1 <> v2) = view v1 <> view v2
+>
+> view mempty = mempty
+-}
+view :: View b -> (View b, Controller a)
+view v = (v, mempty)
+{-# INLINABLE view #-}
+
+{-| Generalize a 'Controller' to a 'View' and 'Controller'
+
+> controller (c1 <> c2) = controller c1 <> controller c2
+>
+> controller mempty = mempty
+-}
+controller :: Controller a -> (View b, Controller a)
+controller c = (mempty, c)
+{-# INLINABLE controller #-}
 
 {-| Convert a 'ListT' transformation to a 'Pipe'
 
@@ -383,6 +368,60 @@ listT k = for cat (every . k)
     So promote your 'ListT' logic to a 'Pipe' when you need to take advantage of
     these 'Pipe'-specific features.
 -}
+
+-- | A managed resource
+newtype Managed r = Managed { _bind :: forall x . (r -> IO x) -> IO x }
+-- `Managed` is the same thing as `Codensity IO` or `forall x . ContT x IO`
+--
+-- I implement a custom type instead of reusing those types because:
+--
+-- * I need a non-orphan `Monoid` instance
+--
+-- * The name and type are simpler
+
+instance Functor Managed where
+    fmap f mx = Managed (\_return ->
+        _bind mx (\x ->
+        _return (f x) ) )
+
+instance Applicative Managed where
+    pure r    = Managed (\_return ->
+        _return r )
+    mf <*> mx = Managed (\_return ->
+        _bind mf (\f ->
+        _bind mx (\x ->
+        _return (f x) ) ) )
+
+instance Monad Managed where
+    return r = Managed (\_return ->
+        _return r )
+    ma >>= f = Managed (\_return ->
+        _bind  ma   (\a ->
+        _bind (f a) (\b ->
+        _return b ) ) )
+
+instance Monoid r => Monoid (Managed r) where
+    mempty  = pure mempty
+    mappend = liftA2 mappend
+
+-- | Created a 'Managed' resource
+managed :: (forall x . (r -> IO x) -> IO x) -> Managed r
+managed = Managed
+
+-- | Read lines from standard input
+stdinLn :: Managed (Controller String)
+stdinLn = producer Unbounded Pipes.stdinLn
+{-# INLINABLE stdinLn #-}
+
+-- | Emit a values spaced by a delay in seconds
+tick :: Double -> Managed (Controller ())
+tick n = producer Unbounded $ lift (threadDelay (truncate (n * 1000000))) >~ cat
+{-# INLINABLE tick #-}
+
+-- | Write lines to standard output
+stdoutLn :: View String
+stdoutLn = sink putStrLn
+{-# INLINABLE stdoutLn #-}
 
 {- $reexports
     "Data.Functor.Constant" re-exports 'Constant' (the type only)
