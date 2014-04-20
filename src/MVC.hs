@@ -272,8 +272,7 @@ sink = View
 
 {- $model
     `Model`s are stateful streams and they sit in between `Controller`s and
-    `View`s.  Connect a `Model`, `View`, and `Controller` and an initial state
-    together using `runMVC` to complete your application.
+    `View`s.
 
     Use `State` to internally communicate within the `Model`.  If you don't
     think you need it, you can enable hard mode by wrapping your model with
@@ -322,6 +321,9 @@ loop k = for cat (every . k)
 
 
 {- $mvc
+    Connect a `Model`, `View`, and `Controller` and an initial state
+    together using `runMVC` to complete your application.
+
     `runMVC` is the only way to consume `View`s and `Controller`s.  The types
     forbid you from mixing `View` and `Controller` logic with your `Model`
     logic.
@@ -329,12 +331,10 @@ loop k = for cat (every . k)
     Note that `runMVC` only accepts one `View` and one `Controller`.  This
     enforces a single entry point and exit point for your `Model` so that you
     can cleanly separate your `Model` logic from your `View` logic and
-    `Controller` logic.
-
-    The way you add more `View`s and `Controller`s to your program is by
-    unifying them into a single `View` or `Controller` by using their `Monoid`
-    instances.  See the \"Controllers\" and \"Views\" sections for more details
-    on how to do this.
+    `Controller` logic.  The way you add more `View`s and `Controller`s to your
+    program is by unifying them into a single `View` or `Controller` by using
+    their `Monoid` instances.  See the \"Controllers\" and \"Views\" sections
+    for more details on how to do this.
 -}
 
 {-| Connect a `Model`, `View`, and `Controller` and initial state into a
@@ -499,7 +499,7 @@ toFile filePath =
 > model :: Model S TotalInput TotalOutput
 > model = fromPipe (loop modelInToOut)
 
-    You can also sequence `ListT` computations, feeding the output of the first
+    You can also chain `ListT` computations, feeding the output of the first
     computation as the input to the next computation:
 
 > -- End-to-end
@@ -521,17 +521,8 @@ toFile filePath =
 
 > -- Mix ListT with Pipes
 >
-> quitOnC :: Monad m => Pipe TotalInput TotalInput m ()
-> quitOnC = do
->     totalInput <- await
->     case totalInput of
->         C -> return ()
->         _ -> do
->             yield totalInput
->             quitOnC
->
 > model :: Model S TotalInput TotalOutput
-> model = fromPipe (quitOnC >-> loop modelInToOut)
+> model = fromPipe (Pipes.takeWhile (/= C) >-> loop modelInToOut)
 
     So promote your `ListT` logic to a `Pipe` when you need to take advantage of
     these `Pipe`-specific features.
