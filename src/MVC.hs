@@ -1,11 +1,14 @@
 {-| Use the `Model` - `View` - `Controller` pattern to separate impure inputs
-    and outputs from pure application logic.  The @mvc@ library statically
-    enforces this separation in the types since the temptation to mix .
+    and outputs from pure application logic so that you can:
 
-    There is no loss of power from programming in this style.  The @mvc@ library
-    also provides mathematical tools for programming effectively while
-    respecting this separation.
-    tools to program effectively while respecting this separation
+    * Equationally reason about your model
+
+    * Exercise your model with property-based testing (like @QuickCheck@)
+
+    * Reproducibly replay your model
+
+    The @mvc@ library uses the type system to statically enforce the separation
+    of impure `View`s and `Controller`s from the pure `Model`.
 
     Here's a small example program written using the @mvc@ library:
 
@@ -19,10 +22,10 @@
 >     return (stdoutLn, fmap show c1 <> c2)
 >
 > model :: Model () String String
-> model = Pipes.takeWhile (/= "quit")
+> model = fromPipe (Pipes.takeWhile (/= "quit"))
 >     
 > main :: IO ()
-> main = runMVC model external ()
+> main = runMVC () model external
 
     This program has three components:
 
@@ -33,8 +36,9 @@
 
     * A pure `Model`, which forwards lines until the user inputs @"quit"@
 
-    This program outputs a @()@ every second and also echoes standard input to
-    standard output until the user enters @"quit"@:
+    'runMVC' connects them into a complete program, which outputs a @()@ every
+    second and also echoes standard input to standard output until the user
+    enters @"quit"@:
 
 >>> main
 ()
@@ -49,7 +53,8 @@ quit<enter>
 >>>
 
     The following sections give extended guidance for how to structure @mvc@
-    programs.
+    programs.  Additionally, there is an elaborate example using the @sdl@
+    library in the \"Example\" section.
 -}
 
 {-# LANGUAGE RankNTypes, GeneralizedNewtypeDeriving #-}
@@ -70,20 +75,31 @@ module MVC (
     -- * Models
     -- $model
     , Model
-    , runMVC
-    , listT
-    -- $listT
+    , fromPipe
+    , toPipe
+    , loop
 
-    -- * Managed Resources
+    -- * MVC
+    -- $mvc
+    , runMVC
+
+    -- * Managed resources
+    -- $managed
     , Managed
     , managed
 
-    -- * Examples
+    -- * Utilities
     , stdinLn
     , fromFile
     , tick
     , stdoutLn
     , toFile
+
+    -- *ListT
+    -- $listT
+
+    -- * Example
+    -- $example
 
     -- * Re-exports
     -- $reexports
@@ -95,6 +111,7 @@ module MVC (
     ) where
 
 import Control.Applicative (Applicative(pure, (<*>)), liftA2, (<*))
+import Control.Category (Category(..))
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (withAsync)
 import Control.Monad (join)
@@ -109,10 +126,12 @@ import Pipes.Concurrent
 import qualified Pipes.Prelude as Pipes
 import qualified System.IO as IO
 
+import Prelude hiding ((.), id)
+
 {- $controller
     `Controller`s represent concurrent inputs to your system.  Use the `Functor`
-    and `Monoid` instances of `Controller` to unify multiple `Controller`s
-    together into a single `Controller`:
+    and `Monoid` instances for `Controller` and `Managed` to unify multiple
+    `Managed` `Controller`s together into a single `Managed` `Controller`:
 
 > controllerA :: Managed (Controller A)
 > controllerB :: Managed (Controller B)
@@ -125,6 +144,8 @@ import qualified System.IO as IO
 >         fmap (fmap InA) controllerA
 >     <>  fmap (fmap InB) controllerB
 >     <>  fmap (fmap InC) controllerC
+
+    Combining `Controller`s interleaves their values.
 -}
 
 {-| A concurrent source
@@ -178,9 +199,11 @@ input = Controller
 >     <>  fmap (handles _OutE) viewE
 >     <>  fmap (handles _OutF) viewF
 
+    Combining `View`s sequences their outputs.
+
     If a @lens@ dependency is too heavy-weight, then you can manually generate
-    `Traversal`s by hand, which `handles` also accepts.  Here is an example of
-    how you would do that:
+    `Traversal`s, which `handles` will also accept.  Here is an example of how
+    you can generate `Traversal`s by hand with no dependencies:
 
 > -- _OutD :: Traversal' TotalOutput D
 > _OutD :: Applicative f => (D -> f D) -> (TotalOutput -> f TotalOutput)
@@ -196,8 +219,6 @@ input = Controller
 > _OutF :: Applicative f => (F -> f F) -> (TotalOutput -> f TotalOutput)
 > _OutF k (OutF d) = fmap OutF (k d)
 > _OutF k  t       = pure t
-
-    instead.  Or you can manually
 -}
 
 {-| An effectful sink
@@ -234,8 +255,9 @@ instance Contravariant View where
 handles
     :: ((b -> Constant (First b) b) -> (a -> Constant (First b) a))
     -- ^
-    -> (View b -> View a)
+    -> View b
     -- ^
+    -> View a
 handles k (View send_) = View (\a -> case match a of
     Nothing -> return ()
     Just b  -> send_ b )
@@ -253,142 +275,97 @@ sink = View
     `View`s.  Connect a `Model`, `View`, and `Controller` and an initial state
     together using `runMVC` to complete your application.
 
-    The `Model` is designed to be pure, reproducible, and concurrency-free so
-    that you can:
-
-    * @QuickCheck@ your model,
-
-    * equationally reason about its behavior, and:
-
-    * replay the model deterministically.
-
     Use `State` to internally communicate within the `Model`.  If you don't
     think you need it, you can enable hard mode by wrapping your model with
     @(hoist generalize)@.
 
-    `runMVC` is the only way to consume `View`s and `Controller`s.  The types
-    forbid you from mixing `View` and `Controller` logic with your `Model`
-    logic.
+    Read the \"ListT\" section which describes why you should prefer `ListT`
+    over `Pipe` when possible.
 -}
 
 {-| A @(Model s a b)@ converts a stream of @(a)@s into a stream of @(b)@s while
     interacting with a state @(s)@
 -}
-type Model s a b = Pipe a b (State s) ()
+newtype Model s a b = FromPipe
+    { toPipe :: Pipe a b (State s) ()
+      -- ^ Convert a `Model` to a `Pipe`
+      --
+      -- > toPipe (m1 . m2) = toPipe m1 <-< toPipe m2
+      -- >
+      -- > toPipe id = cat
+    }
+
+instance Category (Model s) where
+    (FromPipe m1) . (FromPipe m2) = FromPipe (m1 <-< m2)
+
+    id = FromPipe cat
+
+{-| Convert a `Pipe` to a `Model`
+
+> fromPipe (p1 <-< p2) = fromPipe p1 . fromPipe p2
+>
+> fromPipe cat = id
+-}
+fromPipe :: Pipe a b (State s) () -> Model s a b
+fromPipe = FromPipe
+{-# INLINABLE fromPipe #-}
+
+{-| Convert a `ListT` transformation to a `Pipe`
+
+> loop (k1 >=> k2) = loop k1 >-> loop k2
+>
+> loop return = cat
+-}
+loop :: Monad m => (a -> ListT m b) -> Pipe a b m r
+loop k = for cat (every . k)
+{-# INLINABLE loop #-}
+
+
+{- $mvc
+    `runMVC` is the only way to consume `View`s and `Controller`s.  The types
+    forbid you from mixing `View` and `Controller` logic with your `Model`
+    logic.
+
+    Note that `runMVC` only accepts one `View` and one `Controller`.  This
+    enforces a single entry point and exit point for your `Model` so that you
+    can cleanly separate your `Model` logic from your `View` logic and
+    `Controller` logic.
+
+    The way you add more `View`s and `Controller`s to your program is by
+    unifying them into a single `View` or `Controller` by using their `Monoid`
+    instances.  See the \"Controllers\" and \"Views\" sections for more details
+    on how to do this.
+-}
 
 {-| Connect a `Model`, `View`, and `Controller` and initial state into a
     complete application.
 -}
 runMVC
-    :: Model s a b
+    :: s
+    -- ^ Initial state
+    -> Model s a b
     -- ^ Program logic
     -> Managed (View b, Controller a)
     -- ^ Effectful output and input
-    -> s
-    -- ^ Initial state
     -> IO s
-runMVC model viewController initialState =
+    -- ^ Returns final state
+runMVC initialState (FromPipe pipe) viewController =
     _bind viewController $ \(View send_, Controller input_) ->
     flip execStateT initialState $ runEffect $
             fromInput input_
-        >-> hoist (hoist generalize) model
+        >-> hoist (hoist generalize) pipe
         >-> for cat (liftIO . send_)
 {-# INLINABLE runMVC #-}
 
-{-| Convert a `ListT` transformation to a `Pipe`
+{- $managed
+    Use `managed` to create primitive `Managed` resources and use the `Functor`,
+    `Applicative`, `Monad`, and `Monoid` instances for `Managed` to bundle
+    multiple `Managed` resources into a single `Managed` resource.
 
-> listT (k1 >=> k2) = listT k1 >-> listT k2
->
-> listT return = cat
--}
-listT :: Monad m => (a -> ListT m b) -> Pipe a b m r
-listT k = for cat (every . k)
-{-# INLINABLE listT #-}
+    See the source code for the \"Utilities\" section below for several examples
+    of how to create `Managed` resources.
 
-{- $listT
-    `ListT` computations can be combined in more ways than `Pipe`s, so try to
-    program in `ListT` as much as possible and defer converting it to a `Pipe`
-    as late as possible.
-
-    Here are some examples for how to combine `ListT` computations into larger
-    computations:
-
-> -- Independent computations
->
-> modelAToD :: A -> ListT (State S) D
-> modelBToE :: B -> ListT (State S) E
-> modelCToF :: C -> ListT (State s) F
->
-> modelInToOut :: TotalInput -> ListT (State S) TotalOutput
-> modelInToOut totalInput = case totalInput of
->     InA a -> fmap OutD (modelAToD a)
->     InB b -> fmap OutE (modelAToD b)
->     InC c -> fmap OutF (modelAToD c)
->
-> model :: Pipe TotalInput TotalOutput (State S) r
-> model = listT modelInToOut
-
-> -- Overlapping outputs
->
-> modelAToOut :: A -> ListT (State S) Out
-> modelBToOut :: B -> ListT (State S) Out
-> modelCToOut :: C -> ListT (State S) Out
->
-> modelInToOut :: TotalInput -> ListT (State S) TotalOutput
-> modelInToOut totalInput = case totalInput of
->     InA a -> modelAToOut a
->     InB b -> modelBToOut b
->     InC c -> modelBToOut b
->
-> model :: Pipe TotalInput TotalOutput (State S) r
-> model = listT modelInToOut
-
-> -- Overlapping inputs
->
-> modelInToA :: TotalInput -> ListT (State S) A
-> modelInToB :: TotalInput -> ListT (State S) B
-> modelInToC :: TotalInput -> ListT (State S) C
->
-> modelInToOut :: TotalInput -> ListT (State S) TotalOutput
-> modelInToOut totalInput =
->        fmap OutA (modelInToA totalInput)
->     <> fmap OutB (modelInToB totalInput)
->     <> fmap OutC (modelInToC totalInput)
->
-> model :: Pipe TotalInput TotalOutput (State S) r
-> model = listT modelInToOut
-
-> -- End-to-end
->
-> modelInToMiddle  :: TotalInput -> ListT (State S) MiddleStep
-> modelMiddleToOut :: MiddleStep -> ListT (State S) TotalOutput
->
-> -- Or just use `do` notation if you prefer
-> modelInToOut :: TotalInput -> ListT (State S) TotalOutput
-> modelInToOut = modelInToMiddle >=> modelMiddleToOut
->
-> model :: Pipe TotalInput TotalOutput (State S) r
-> model = listT modelInToOut
-
-    However, `Pipe` is more general than `ListT` and can represent things like
-    termination:
-
-> -- Mix ListT with Pipes to terminate on a given input
->
-> quitOnC :: Monad m => Pipe TotalInput TotalInput m ()
-> quitOnC = do
->     totalInput <- await
->     case totalInput of
->         C -> return ()
->         _ -> do
->             yield totalInput
->             quitOnC
->
-> model :: Pipe TotalInput TotalOutput (State S) ()
-> model = quitOnC >-> listT modelInToOut
-
-    So promote your `ListT` logic to a `Pipe` when you need to take advantage of
-    these `Pipe`-specific features.
+    Note that `runMVC` is the only way to consume `Managed` resources.
 -}
 
 -- | A managed resource
@@ -461,6 +438,197 @@ toFile filePath =
         IO.withFile filePath IO.WriteMode $ \handle ->
             k (sink (IO.hPutStrLn handle))
 {-# INLINABLE toFile #-}
+
+{- $listT
+    `ListT` computations can be combined in more ways than `Pipe`s, so try to
+    program in `ListT` as much as possible and defer converting it to a `Pipe`
+    as late as possible.
+
+    You can combine `ListT` computations even if their inputs and outputs are
+    completely different:
+
+> -- Independent computations
+>
+> modelAToD :: A -> ListT (State S) D
+> modelBToE :: B -> ListT (State S) E
+> modelCToF :: C -> ListT (State s) F
+>
+> modelInToOut :: TotalInput -> ListT (State S) TotalOutput
+> modelInToOut totalInput = case totalInput of
+>     InA a -> fmap OutD (modelAToD a)
+>     InB b -> fmap OutE (modelAToD b)
+>     InC c -> fmap OutF (modelAToD c)
+>
+> model :: Model S TotalInput TotalOutput
+> model = fromPipe (loop modelInToOut)
+
+    Sometimes you have multiple computations that handle different inputs but
+    the same output, in which case you don't need to unify their outputs:
+
+> -- Overlapping outputs
+>
+> modelAToOut :: A -> ListT (State S) Out
+> modelBToOut :: B -> ListT (State S) Out
+> modelCToOut :: C -> ListT (State S) Out
+>
+> modelInToOut :: TotalInput -> ListT (State S) TotalOutput
+> modelInToOut totalInput = case totalInput of
+>     InA a -> modelAToOut a
+>     InB b -> modelBToOut b
+>     InC c -> modelBToOut b
+>
+> model :: Model S TotalInput TotalOutput
+> model = fromPipe (loop modelInToOut)
+
+    Other times you have multiple computations that handle the same input but
+    produce different outputs.  You can unify their outputs using the `Monoid`
+    and `Functor` instances for `ListT`:
+
+> -- Overlapping inputs
+>
+> modelInToA :: TotalInput -> ListT (State S) A
+> modelInToB :: TotalInput -> ListT (State S) B
+> modelInToC :: TotalInput -> ListT (State S) C
+>
+> modelInToOut :: TotalInput -> ListT (State S) TotalOutput
+> modelInToOut totalInput =
+>        fmap OutA (modelInToA totalInput)
+>     <> fmap OutB (modelInToB totalInput)
+>     <> fmap OutC (modelInToC totalInput)
+>
+> model :: Model S TotalInput TotalOutput
+> model = fromPipe (loop modelInToOut)
+
+    You can also sequence `ListT` computations, feeding the output of the first
+    computation as the input to the next computation:
+
+> -- End-to-end
+>
+> modelInToMiddle  :: TotalInput -> ListT (State S) MiddleStep
+> modelMiddleToOut :: MiddleStep -> ListT (State S) TotalOutput
+>
+> modelInToOut :: TotalInput -> ListT (State S) TotalOutput
+> modelInToOut = modelInToMiddle >=> modelMiddleToOut
+>
+> model :: Model S TotalInput TotalOutput
+> model = fromPipe (loop modelInToOut)
+
+    ... or you can just use @do@ notation if you prefer.
+
+    However, the `Pipe` type is more general than `ListT` and can represent
+    things like termination.  Therefore you should consider mixing `Pipe`s with
+    `ListT` when you need to take advantage of these extra features:
+
+> -- Mix ListT with Pipes
+>
+> quitOnC :: Monad m => Pipe TotalInput TotalInput m ()
+> quitOnC = do
+>     totalInput <- await
+>     case totalInput of
+>         C -> return ()
+>         _ -> do
+>             yield totalInput
+>             quitOnC
+>
+> model :: Model S TotalInput TotalOutput
+> model = fromPipe (quitOnC >-> loop modelInToOut)
+
+    So promote your `ListT` logic to a `Pipe` when you need to take advantage of
+    these `Pipe`-specific features.
+-}
+
+{- $example
+    The following example distils a @sdl@-based program into pure and impure
+    components.  This program will draw a white rectangle between every two
+    mouse clicks.
+
+    The first half of the program contains all the concurrent and impure logic.
+    The `View` and `Controller` must be `Managed` together since they both share
+    the same initialization logic:
+
+> import Control.Monad (join)
+> import Graphics.UI.SDL as SDL
+> import Lens.Family.Stock (_Left, _Right)
+> import MVC
+> import qualified Pipes.Prelude as Pipes
+> 
+> data Done = Done deriving (Eq, Show)
+> 
+> sdl :: Managed (View (Either Rect Done), Controller Event)
+> sdl = join $ managed $ \k -> withInit [InitEverything] $ do
+>     surface <- setVideoMode 640 480 32 [SWSurface]
+>     white   <- mapRGB (surfaceGetPixelFormat surface) 255 255 255
+> 
+>     let done :: View Done
+>         done = sink (\Done -> SDL.quit)
+> 
+>         drawRect :: View Rect
+>         drawRect = sink $ \rect -> do
+>             _ <- fillRect surface (Just rect) white
+>             SDL.flip surface
+> 
+>         totalOut :: View (Either Rect Done)
+>         totalOut = handles _Left drawRect <> handles _Right done
+> 
+>     k $ do
+>         totalIn <- producer Single (lift waitEvent >~ cat)
+>         return (totalOut, totalIn)
+
+    Note the `join` surrounding the `managed` block.  This is because the type
+    before `join` is:
+
+> Managed (Managed (View (Either Rect Done), Controller Event))
+
+    More generally, note that `Managed` is a `Monad`, so you can use @do@
+    notation to combine multiple `Managed` resources into a single `Managed`
+    resource.
+
+    The second half of the program contains the pure logic.
+
+> model :: Monad m => Model () Event (Either Rect Done)
+> model = fromPipe $ do
+>     Pipes.takeWhile (/= Quit) >-> (click >~ rectangle >~ Pipes.map Left)
+>     yield (Right Done)
+> 
+> rectangle :: Monad m => Consumer' (Int, Int) m Rect
+> rectangle = do
+>     (x1, y1) <- await
+>     (x2, y2) <- await
+>     let x = min x1 x2
+>         y = min y1 y2
+>         w = abs (x1 - x2)
+>         h = abs (y1 - y2)
+>     return (Rect x y w h)
+> 
+> click :: Monad m => Consumer' Event m (Int, Int)
+> click = do
+>     e <- await
+>     case e of
+>         MouseButtonDown x y ButtonLeft ->
+>             return (fromIntegral x, fromIntegral y)
+>         _ -> click
+> 
+> main :: IO ()
+> main = runMVC () model sdl
+
+    Run the program to verify that clicks create rectangles.
+
+    The more logic you move into the pure core the more you can exercise your
+    program purely, either manually:
+
+>>> let leftClick (x, y) = MouseButtonDown x y ButtonLeft
+>>> Pipes.toList (each [leftClick (10, 10), leftClick (15, 16), Quit] >-> model)
+[Left (Rect {rectX = 10, rectY = 10, rectW = 5, rectH = 6}),Right Done]
+
+    ... or automatically using property-based testing (such as @QuickCheck@):
+
+>>> import Test.QuickCheck
+>>> quickCheck $ \xs -> length (Pipes.toList (each (map leftClick xs) >-> model)) == length xs `div` 2
++++ OK, passed 100 tests.
+
+    Equally important, you can formally prove properties about your model using
+    equational reasoning because the model is `IO`-free and concurrency-free.
+-}
 
 {- $reexports
     "Data.Functor.Constant" re-exports `Constant` (the type only)
