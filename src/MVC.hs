@@ -12,16 +12,17 @@
 > import MVC
 > import qualified Pipes.Prelude as Pipes
 >
+> external :: Managed (View String, Controller String)
+> external = do
+>     c1 <- tick 1
+>     c2 <- stdinLn
+>     return (stdoutLn, fmap show c1 <> c2)
+>
+> model :: Model () String String
+> model = Pipes.takeWhile (/= "quit")
+>     
 > main :: IO ()
-> main =
->     runMVC
->         (Pipes.takeWhile (/= "quit"))                      -- Model
->         (   fmap view        stdoutLn                      -- View
->         <>  fmap controller (   fmap (fmap show) (tick 1)  -- Controller
->                             <>  stdinLn                    -- Controller
->                             )
->         )
->         ()  -- Initial state (unused)
+> main = runMVC model external ()
 
     This program has three components:
 
@@ -47,21 +48,8 @@ Test
 quit<enter>
 >>>
 
-    @mvc@ combinators obey useful algebraic properties, which let you reorganize
-    code.  For example, the following program is mathematically equal to the
-    previous program:
-
-> main =
->     runMVC
->         (Pipes.takeWhile (/= "quit"))                -- Model
->         (   fmap  view                     stdoutLn  -- View
->         <>  fmap (controller . fmap show) (tick 1)   -- Controller
->         <>  fmap  controller               stdinLn   -- Controller
->         )
->         ()
-
     The following sections give extended guidance for how to structure @mvc@
-    programs in the large.
+    programs.
 -}
 
 {-# LANGUAGE RankNTypes, GeneralizedNewtypeDeriving #-}
@@ -83,11 +71,6 @@ module MVC (
     -- $model
     , Model
     , runMVC
-
-    -- * Utilities
-    -- $utilities
-    , view
-    , controller
     , listT
     -- $listT
 
@@ -97,8 +80,10 @@ module MVC (
 
     -- * Examples
     , stdinLn
+    , fromFile
     , tick
     , stdoutLn
+    , toFile
 
     -- * Re-exports
     -- $reexports
@@ -112,6 +97,7 @@ module MVC (
 import Control.Applicative (Applicative(pure, (<*>)), liftA2, (<*))
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (withAsync)
+import Control.Monad (join)
 import Control.Monad.Morph (generalize)
 import Control.Monad.Trans.State.Strict (State, execStateT)
 import Data.Functor.Constant (Constant(Constant, getConstant))
@@ -121,6 +107,7 @@ import qualified Data.Monoid as M
 import Pipes
 import Pipes.Concurrent
 import qualified Pipes.Prelude as Pipes
+import qualified System.IO as IO
 
 {- $controller
     `Controller`s represent concurrent inputs to your system.  Use the `Functor`
@@ -233,8 +220,8 @@ instance Contravariant View where
 > handles :: Prism'     a b -> View b -> View a
 > handles :: Traversal' a b -> View b -> View a
 
-    @(handles prism action)@ only runs the @action@ if the @prism@ matches the
-    @action@'s input.
+    @(handles prism view)@ only runs the @view@ if the @prism@ matches the
+    @view@'s input.
 
 > handles (p1 . p2) = handles p2 . handles p1
 >
@@ -308,34 +295,6 @@ runMVC model viewController initialState =
         >-> for cat (liftIO . send_)
 {-# INLINABLE runMVC #-}
 
-{- $utilities
-    Use `view` and `controller` to mix `View`s and `Controller`s using
-    `Monoid` syntax:
-
-> viewControllerTotal :: Managed (View TotalOutput, Controller TotalInput)
-> viewControllerTotal = fmap view viewTotal <> fmap controller controllerTotal
--}
-
-{-| Generalize a `View` to a `View` and `Controller`
-
-> view (v1 <> v2) = view v1 <> view v2
->
-> view mempty = mempty
--}
-view :: View b -> (View b, Controller a)
-view v = (v, mempty)
-{-# INLINABLE view #-}
-
-{-| Generalize a `Controller` to a `View` and `Controller`
-
-> controller (c1 <> c2) = controller c1 <> controller c2
->
-> controller mempty = mempty
--}
-controller :: Controller a -> (View b, Controller a)
-controller c = (mempty, c)
-{-# INLINABLE controller #-}
-
 {-| Convert a `ListT` transformation to a `Pipe`
 
 > listT (k1 >=> k2) = listT k1 >-> listT k2
@@ -404,7 +363,7 @@ listT k = for cat (every . k)
 > modelInToMiddle  :: TotalInput -> ListT (State S) MiddleStep
 > modelMiddleToOut :: MiddleStep -> ListT (State S) TotalOutput
 >
-> -- Or just use `do` notation: `ListT` is a `Monad`
+> -- Or just use `do` notation if you prefer
 > modelInToOut :: TotalInput -> ListT (State S) TotalOutput
 > modelInToOut = modelInToMiddle >=> modelMiddleToOut
 >
@@ -470,21 +429,38 @@ instance Monoid r => Monoid (Managed r) where
 -- | Created a `Managed` resource
 managed :: (forall x . (r -> IO x) -> IO x) -> Managed r
 managed = Managed
+{-# INLINABLE managed #-}
 
 -- | Read lines from standard input
 stdinLn :: Managed (Controller String)
-stdinLn = producer Unbounded Pipes.stdinLn
+stdinLn = producer Single Pipes.stdinLn
 {-# INLINABLE stdinLn #-}
+
+-- | Read lines from a file
+fromFile :: FilePath -> Managed (Controller String)
+fromFile filePath =
+    join $ managed $ \k ->
+        IO.withFile filePath IO.ReadMode $ \handle ->
+            (k (producer Single (Pipes.fromHandle handle)))
+{-# INLINABLE fromFile #-}
 
 -- | Emit a values spaced by a delay in seconds
 tick :: Double -> Managed (Controller ())
-tick n = producer Unbounded $ lift (threadDelay (truncate (n * 1000000))) >~ cat
+tick n = producer Single $ lift (threadDelay (truncate (n * 1000000))) >~ cat
 {-# INLINABLE tick #-}
 
 -- | Write lines to standard output
-stdoutLn :: Managed (View String)
-stdoutLn = pure (sink putStrLn)
+stdoutLn :: View String
+stdoutLn = sink putStrLn
 {-# INLINABLE stdoutLn #-}
+
+-- | Write lines to a file
+toFile :: FilePath -> Managed (View String)
+toFile filePath =
+    managed $ \k ->
+        IO.withFile filePath IO.WriteMode $ \handle ->
+            k (sink (IO.hPutStrLn handle))
+{-# INLINABLE toFile #-}
 
 {- $reexports
     "Data.Functor.Constant" re-exports `Constant` (the type only)
