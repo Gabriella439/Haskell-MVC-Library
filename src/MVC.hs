@@ -1,5 +1,67 @@
-{-| Use the 'Model' - 'View' - 'Controller' pattern to separate impure inputs
-    and outputs from pure application logic.
+{-| Use the `Model` - `View` - `Controller` pattern to separate impure inputs
+    and outputs from pure application logic.  The @mvc@ library statically
+    enforces this separation in the types since the temptation to mix .
+
+    There is no loss of power from programming in this style.  The @mvc@ library
+    also provides mathematical tools for programming effectively while
+    respecting this separation.
+    tools to program effectively while respecting this separation
+
+    Here's a small example program written using the @mvc@ library:
+
+> import MVC
+> import qualified Pipes.Prelude as Pipes
+>
+> main :: IO ()
+> main =
+>     runMVC
+>         (Pipes.takeWhile (/= "quit"))                      -- Model
+>         (   fmap view        stdoutLn                      -- View
+>         <>  fmap controller (   fmap (fmap show) (tick 1)  -- Controller
+>                             <>  stdinLn                    -- Controller
+>                             )
+>         )
+>         ()  -- Initial state (unused)
+
+    This program has three components:
+
+    * A `Controller` that interleaves lines from standard input with periodic
+      ticks
+
+    * A `View` that writes lines to standard output
+
+    * A pure `Model`, which forwards lines until the user inputs @"quit"@
+
+    This program outputs a @()@ every second and also echoes standard input to
+    standard output until the user enters @"quit"@:
+
+>>> main
+()
+Test<Enter>
+Test
+()
+()
+42<Enter>
+42
+()
+quit<enter>
+>>>
+
+    @mvc@ combinators obey useful algebraic properties, which let you reorganize
+    code.  For example, the following program is mathematically equal to the
+    previous program:
+
+> main =
+>     runMVC
+>         (Pipes.takeWhile (/= "quit"))                -- Model
+>         (   fmap  view                     stdoutLn  -- View
+>         <>  fmap (controller . fmap show) (tick 1)   -- Controller
+>         <>  fmap  controller               stdinLn   -- Controller
+>         )
+>         ()
+
+    The following sections give extended guidance for how to structure @mvc@
+    programs in the large.
 -}
 
 {-# LANGUAGE RankNTypes, GeneralizedNewtypeDeriving #-}
@@ -61,9 +123,9 @@ import Pipes.Concurrent
 import qualified Pipes.Prelude as Pipes
 
 {- $controller
-    'Controller's represent concurrent inputs to your system.  Use the 'Functor'
-    and 'Monoid' instances of 'Controller' to unify multiple 'Controller's
-    together into a single 'Controller':
+    `Controller`s represent concurrent inputs to your system.  Use the `Functor`
+    and `Monoid` instances of `Controller` to unify multiple `Controller`s
+    together into a single `Controller`:
 
 > controllerA :: Managed (Controller A)
 > controllerB :: Managed (Controller B)
@@ -93,9 +155,9 @@ newtype Controller a = Controller (Input a) deriving (Functor, Monoid)
 --   consume `Controller`s.  This enforces strict separation of `Controller`
 --   logic from `Model` or `View` logic
 
-{-| Create a 'Controller' from a 'Producer', using the given 'Buffer'
+{-| Create a `Controller` from a `Producer`, using the given `Buffer`
 
-    If you're not sure what 'Buffer' to use, try 'Single'
+    If you're not sure what `Buffer` to use, try `Single`
 -}
 producer :: Buffer a -> Producer a IO () -> Managed (Controller a)
 producer buffer prod = managed $ \k -> do
@@ -106,14 +168,14 @@ producer buffer prod = managed $ \k -> do
     withAsync io $ \_ -> k (input i) <* atomically seal
 {-# INLINABLE producer #-}
 
--- | Create a 'Controller' from an 'Input'
+-- | Create a `Controller` from an `Input`
 input :: Input a -> Controller a
 input = Controller
 {-# INLINABLE input #-}
 
 {- $view
-    'View's represent outputs of your system.  Use 'handles' and the 'Monoid'
-    instance of 'View' to unify multiple 'View's together into a single 'View':
+    `View`s represent outputs of your system.  Use `handles` and the `Monoid`
+    instance of `View` to unify multiple `View`s together into a single `View`:
 
 > viewD :: Managed (View D)
 > viewE :: Managed (View E)
@@ -130,7 +192,7 @@ input = Controller
 >     <>  fmap (handles _OutF) viewF
 
     If a @lens@ dependency is too heavy-weight, then you can manually generate
-    'Traversal's by hand, which 'handles' also accepts.  Here is an example of
+    `Traversal`s by hand, which `handles` also accepts.  Here is an example of
     how you would do that:
 
 > -- _OutD :: Traversal' TotalOutput D
@@ -194,17 +256,17 @@ handles k (View send_) = View (\a -> case match a of
     match = M.getFirst . getConstant . k (Constant . M.First . Just)
 {-# INLINABLE handles #-}
 
--- | Convert a sink to a 'View'
+-- | Convert a sink to a `View`
 sink :: (a -> IO ()) -> View a
 sink = View
 {-# INLINABLE sink #-}
 
 {- $model
-    'Model's are stateful streams and they sit in between 'Controller's and
-    'View's.  Connect a 'Model', 'View', and 'Controller' and an initial state
-    together using 'runMVC' to complete your application.
+    `Model`s are stateful streams and they sit in between `Controller`s and
+    `View`s.  Connect a `Model`, `View`, and `Controller` and an initial state
+    together using `runMVC` to complete your application.
 
-    The 'Model' is designed to be pure, reproducible, and concurrency-free so
+    The `Model` is designed to be pure, reproducible, and concurrency-free so
     that you can:
 
     * @QuickCheck@ your model,
@@ -213,12 +275,12 @@ sink = View
 
     * replay the model deterministically.
 
-    Use 'State' to internally communicate within the 'Model'.  If you don't
+    Use `State` to internally communicate within the `Model`.  If you don't
     think you need it, you can enable hard mode by wrapping your model with
     @(hoist generalize)@.
 
-    'runMVC' is the only way to consume 'View's and 'Controller's.  The types
-    forbid you from mixing 'View' and 'Controller' logic with your 'Model'
+    `runMVC` is the only way to consume `View`s and `Controller`s.  The types
+    forbid you from mixing `View` and `Controller` logic with your `Model`
     logic.
 -}
 
@@ -227,7 +289,7 @@ sink = View
 -}
 type Model s a b = Pipe a b (State s) ()
 
-{-| Connect a 'Model', 'View', and 'Controller' and initial state into a
+{-| Connect a `Model`, `View`, and `Controller` and initial state into a
     complete application.
 -}
 runMVC
@@ -247,14 +309,14 @@ runMVC model viewController initialState =
 {-# INLINABLE runMVC #-}
 
 {- $utilities
-    Use 'view' and 'controller' to mix 'View's and 'Controller's using
-    'Monoid' syntax:
+    Use `view` and `controller` to mix `View`s and `Controller`s using
+    `Monoid` syntax:
 
 > viewControllerTotal :: Managed (View TotalOutput, Controller TotalInput)
 > viewControllerTotal = fmap view viewTotal <> fmap controller controllerTotal
 -}
 
-{-| Generalize a 'View' to a 'View' and 'Controller'
+{-| Generalize a `View` to a `View` and `Controller`
 
 > view (v1 <> v2) = view v1 <> view v2
 >
@@ -264,7 +326,7 @@ view :: View b -> (View b, Controller a)
 view v = (v, mempty)
 {-# INLINABLE view #-}
 
-{-| Generalize a 'Controller' to a 'View' and 'Controller'
+{-| Generalize a `Controller` to a `View` and `Controller`
 
 > controller (c1 <> c2) = controller c1 <> controller c2
 >
@@ -274,7 +336,7 @@ controller :: Controller a -> (View b, Controller a)
 controller c = (mempty, c)
 {-# INLINABLE controller #-}
 
-{-| Convert a 'ListT' transformation to a 'Pipe'
+{-| Convert a `ListT` transformation to a `Pipe`
 
 > listT (k1 >=> k2) = listT k1 >-> listT k2
 >
@@ -285,11 +347,11 @@ listT k = for cat (every . k)
 {-# INLINABLE listT #-}
 
 {- $listT
-    'ListT' computations can be combined in more ways than 'Pipe's, so try to
-    program in 'ListT' as much as possible and defer converting it to a 'Pipe'
+    `ListT` computations can be combined in more ways than `Pipe`s, so try to
+    program in `ListT` as much as possible and defer converting it to a `Pipe`
     as late as possible.
 
-    Here are some examples for how to combine 'ListT' computations into larger
+    Here are some examples for how to combine `ListT` computations into larger
     computations:
 
 > -- Independent computations
@@ -342,13 +404,14 @@ listT k = for cat (every . k)
 > modelInToMiddle  :: TotalInput -> ListT (State S) MiddleStep
 > modelMiddleToOut :: MiddleStep -> ListT (State S) TotalOutput
 >
+> -- Or just use `do` notation: `ListT` is a `Monad`
 > modelInToOut :: TotalInput -> ListT (State S) TotalOutput
 > modelInToOut = modelInToMiddle >=> modelMiddleToOut
 >
 > model :: Pipe TotalInput TotalOutput (State S) r
 > model = listT modelInToOut
 
-    However, 'Pipe' is more general than 'ListT' and can represent things like
+    However, `Pipe` is more general than `ListT` and can represent things like
     termination:
 
 > -- Mix ListT with Pipes to terminate on a given input
@@ -365,8 +428,8 @@ listT k = for cat (every . k)
 > model :: Pipe TotalInput TotalOutput (State S) ()
 > model = quitOnC >-> listT modelInToOut
 
-    So promote your 'ListT' logic to a 'Pipe' when you need to take advantage of
-    these 'Pipe'-specific features.
+    So promote your `ListT` logic to a `Pipe` when you need to take advantage of
+    these `Pipe`-specific features.
 -}
 
 -- | A managed resource
@@ -404,7 +467,7 @@ instance Monoid r => Monoid (Managed r) where
     mempty  = pure mempty
     mappend = liftA2 mappend
 
--- | Created a 'Managed' resource
+-- | Created a `Managed` resource
 managed :: (forall x . (r -> IO x) -> IO x) -> Managed r
 managed = Managed
 
@@ -419,16 +482,16 @@ tick n = producer Unbounded $ lift (threadDelay (truncate (n * 1000000))) >~ cat
 {-# INLINABLE tick #-}
 
 -- | Write lines to standard output
-stdoutLn :: View String
-stdoutLn = sink putStrLn
+stdoutLn :: Managed (View String)
+stdoutLn = pure (sink putStrLn)
 {-# INLINABLE stdoutLn #-}
 
 {- $reexports
-    "Data.Functor.Constant" re-exports 'Constant' (the type only)
+    "Data.Functor.Constant" re-exports `Constant` (the type only)
 
-    "Data.Functor.Contravariant" re-exports 'Contravariant'
+    "Data.Functor.Contravariant" re-exports `Contravariant`
 
-    "Data.Monoid" re-exports 'Monoid', ('<>'), 'mconcat', and 'First' (the type
+    "Data.Monoid" re-exports `Monoid`, (`<>`), `mconcat`, and `First` (the type
     only)
 
     "Pipes" re-exports everything
