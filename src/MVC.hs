@@ -17,9 +17,9 @@
 >
 > external :: Managed (View String, Controller String)
 > external = do
->     c1 <- tick 1
->     c2 <- stdinLn
->     return (stdoutLn, fmap show c1 <> c2)
+>     c1 <- stdinLn
+>     c2 <- tick 1
+>     return (stdoutLn, c1 <> fmap show c2)
 >
 > model :: Model () String String
 > model = pipe (Pipes.takeWhile (/= "quit"))
@@ -53,7 +53,7 @@ quit<enter>
 >>>
 
     The following sections give extended guidance for how to structure @mvc@
-    programs.  Additionally, there is an elaborate example using the @sdl@
+    programs.  Additionally, there is a more elaborate example using the @sdl@
     library in the \"Example\" section.
 -}
 
@@ -253,7 +253,7 @@ instance Contravariant View where
     @(handles prism view)@ only runs the @view@ if the @prism@ matches the
     @view@'s input.
 
-> handles (p1 . p2) = handles p2 . handles p1
+> handles (p1 . p2) = handles p1 . handles p2
 >
 > handles id = id
 
@@ -283,9 +283,7 @@ sink = View
     `Model`s are stateful streams and they sit in between `Controller`s and
     `View`s.
 
-    Use `State` to internally communicate within the `Model`.  If you don't
-    think you need it, you can enable hard mode by wrapping your model with
-    @(hoist generalize)@.
+    Use `State` to internally communicate within the `Model`.
 
     Read the \"ListT\" section which describes why you should prefer `ListT`
     over `Pipe` when possible.
