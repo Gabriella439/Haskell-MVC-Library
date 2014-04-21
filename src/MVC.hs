@@ -22,7 +22,7 @@
 >     return (stdoutLn, fmap show c1 <> c2)
 >
 > model :: Model () String String
-> model = fromPipe (Pipes.takeWhile (/= "quit"))
+> model = pipe (Pipes.takeWhile (/= "quit"))
 >     
 > main :: IO ()
 > main = runMVC () model external
@@ -75,8 +75,7 @@ module MVC (
     -- * Models
     -- $model
     , Model
-    , fromPipe
-    , toPipe
+    , pipe
     , loop
 
     -- * MVC
@@ -285,14 +284,7 @@ sink = View
 {-| A @(Model s a b)@ converts a stream of @(a)@s into a stream of @(b)@s while
     interacting with a state @(s)@
 -}
-newtype Model s a b = FromPipe
-    { toPipe :: Pipe a b (State s) ()
-      -- ^ Convert a `Model` to a `Pipe`
-      --
-      -- > toPipe (m1 . m2) = toPipe m1 <-< toPipe m2
-      -- >
-      -- > toPipe id = cat
-    }
+newtype Model s a b = FromPipe (Pipe a b (State s) ())
 
 instance Category (Model s) where
     (FromPipe m1) . (FromPipe m2) = FromPipe (m1 <-< m2)
@@ -301,13 +293,13 @@ instance Category (Model s) where
 
 {-| Convert a `Pipe` to a `Model`
 
-> fromPipe (p1 <-< p2) = fromPipe p1 . fromPipe p2
+> pipe (p1 <-< p2) = pipe p1 . pipe p2
 >
-> fromPipe cat = id
+> pipe cat = id
 -}
-fromPipe :: Pipe a b (State s) () -> Model s a b
-fromPipe = FromPipe
-{-# INLINABLE fromPipe #-}
+pipe :: Pipe a b (State s) () -> Model s a b
+pipe = FromPipe
+{-# INLINABLE pipe #-}
 
 {-| Convert a `ListT` transformation to a `Pipe`
 
@@ -349,11 +341,11 @@ runMVC
     -- ^ Effectful output and input
     -> IO s
     -- ^ Returns final state
-runMVC initialState (FromPipe pipe) viewController =
+runMVC initialState (FromPipe pipe_) viewController =
     _bind viewController $ \(View send_, Controller input_) ->
     flip execStateT initialState $ runEffect $
             fromInput input_
-        >-> hoist (hoist generalize) pipe
+        >-> hoist (hoist generalize) pipe_
         >-> for cat (liftIO . send_)
 {-# INLINABLE runMVC #-}
 
@@ -460,7 +452,7 @@ toFile filePath =
 >     InC c -> fmap OutF (modelAToD c)
 >
 > model :: Model S TotalInput TotalOutput
-> model = fromPipe (loop modelInToOut)
+> model = pipe (loop modelInToOut)
 
     Sometimes you have multiple computations that handle different inputs but
     the same output, in which case you don't need to unify their outputs:
@@ -478,7 +470,7 @@ toFile filePath =
 >     InC c -> modelBToOut b
 >
 > model :: Model S TotalInput TotalOutput
-> model = fromPipe (loop modelInToOut)
+> model = pipe (loop modelInToOut)
 
     Other times you have multiple computations that handle the same input but
     produce different outputs.  You can unify their outputs using the `Monoid`
@@ -497,7 +489,7 @@ toFile filePath =
 >     <> fmap OutC (modelInToC totalInput)
 >
 > model :: Model S TotalInput TotalOutput
-> model = fromPipe (loop modelInToOut)
+> model = pipe (loop modelInToOut)
 
     You can also chain `ListT` computations, feeding the output of the first
     computation as the input to the next computation:
@@ -511,7 +503,7 @@ toFile filePath =
 > modelInToOut = modelInToMiddle >=> modelMiddleToOut
 >
 > model :: Model S TotalInput TotalOutput
-> model = fromPipe (loop modelInToOut)
+> model = pipe (loop modelInToOut)
 
     ... or you can just use @do@ notation if you prefer.
 
@@ -522,7 +514,7 @@ toFile filePath =
 > -- Mix ListT with Pipes
 >
 > model :: Model S TotalInput TotalOutput
-> model = fromPipe (Pipes.takeWhile (/= C) >-> loop modelInToOut)
+> model = pipe (Pipes.takeWhile (/= C) >-> loop modelInToOut)
 
     So promote your `ListT` logic to a `Pipe` when you need to take advantage of
     these `Pipe`-specific features.
@@ -577,7 +569,7 @@ toFile filePath =
     The second half of the program contains the pure logic.
 
 > model :: Monad m => Model () Event (Either Rect Done)
-> model = fromPipe $ do
+> model = pipe $ do
 >     Pipes.takeWhile (/= Quit) >-> (click >~ rectangle >~ Pipes.map Left)
 >     yield (Right Done)
 > 
