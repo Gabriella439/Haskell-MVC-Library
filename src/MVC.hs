@@ -57,7 +57,7 @@ quit<enter>
     library in the \"Example\" section.
 -}
 
-{-# LANGUAGE RankNTypes, GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE RankNTypes #-}
 
 module MVC (
     -- * Controllers
@@ -153,7 +153,7 @@ import Prelude hiding ((.), id)
 >
 > fmap f mempty = mempty
 -}
-newtype Controller a = Controller (Input a) deriving (Functor, Monoid)
+newtype Controller a = Controller (Input a)
 -- This is just a newtype wrapper around `Input` because:
 --
 -- * I want the `Controller` name to "stick" in inferred types
@@ -161,6 +161,16 @@ newtype Controller a = Controller (Input a) deriving (Functor, Monoid)
 -- * I want to restrict the API to ensure that `runMVC` is the only way to
 --   consume `Controller`s.  This enforces strict separation of `Controller`
 --   logic from `Model` or `View` logic
+
+-- Deriving `Functor`
+instance Functor Controller where
+    fmap f (Controller i) = Controller (fmap f i)
+
+-- Deriving `Monoid`
+instance Monoid (Controller a) where
+    mappend (Controller i1) (Controller i2) = Controller (mappend i1 i2)
+
+    mempty = Controller mempty
 
 {-| Create a `Controller` from a `Producer`, using the given `Buffer`
 
