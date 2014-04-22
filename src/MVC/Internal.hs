@@ -1,9 +1,7 @@
 {-# LANGUAGE RankNTypes #-}
 
-{-| I prefer not to export this module.  Use `MVC.Lens`, which provides a public
-    and forwards-compatible API.  `MVC.Lens` is equivalent in power to this
-    internal module and you can ask me how to translate operations on internals
-    into equivalent operations on lenses.
+{-| I prefer not to export this module.  Use `MVC.Prism`, which provides a
+    public and forwards-compatible API for more complex operations.
 -}
 
 module MVC.Internal (
