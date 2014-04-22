@@ -22,7 +22,7 @@
 >     return (stdoutLn, c1 <> fmap show c2)
 >
 > model :: Model () String String
-> model = pipe (Pipes.takeWhile (/= "quit"))
+> model = asPipe (Pipes.takeWhile (/= "quit"))
 >     
 > main :: IO ()
 > main = runMVC () model external
@@ -64,18 +64,18 @@ module MVC (
     -- $controller
       Controller
     , producer
-    , input
+    , asInput
 
     -- * Views
     -- $view
     , View
     , handles
-    , sink
+    , asSink
 
     -- * Models
     -- $model
     , Model
-    , pipe
+    , asPipe
     , loop
 
     -- * MVC
@@ -109,7 +109,7 @@ module MVC (
     , module Pipes.Concurrent
     ) where
 
-import Control.Applicative (Applicative(pure, (<*>)), liftA2, (<*))
+import Control.Applicative (Applicative((<*)))
 import Control.Category (Category(..))
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (withAsync)
@@ -124,6 +124,8 @@ import Pipes
 import Pipes.Concurrent
 import qualified Pipes.Prelude as Pipes
 import qualified System.IO as IO
+
+import MVC.Internal (Model(..), Controller(..), View(..), Managed(..))
 
 import Prelude hiding ((.), id)
 
@@ -147,31 +149,6 @@ import Prelude hiding ((.), id)
     Combining `Controller`s interleaves their values.
 -}
 
-{-| A concurrent source
-
-> fmap f (c1 <> c2) = fmap f c1 <> fmap f c2
->
-> fmap f mempty = mempty
--}
-newtype Controller a = Controller (Input a)
--- This is just a newtype wrapper around `Input` because:
---
--- * I want the `Controller` name to "stick" in inferred types
---
--- * I want to restrict the API to ensure that `runMVC` is the only way to
---   consume `Controller`s.  This enforces strict separation of `Controller`
---   logic from `Model` or `View` logic
-
--- Deriving `Functor`
-instance Functor Controller where
-    fmap f (Controller i) = Controller (fmap f i)
-
--- Deriving `Monoid`
-instance Monoid (Controller a) where
-    mappend (Controller i1) (Controller i2) = Controller (mappend i1 i2)
-
-    mempty = Controller mempty
-
 {-| Create a `Controller` from a `Producer`, using the given `Buffer`
 
     If you're not sure what `Buffer` to use, try `Single`
@@ -182,13 +159,13 @@ producer buffer prod = managed $ \k -> do
     let io = do
             runEffect $ prod >-> toOutput o
             atomically seal
-    withAsync io $ \_ -> k (input i) <* atomically seal
+    withAsync io $ \_ -> k (asInput i) <* atomically seal
 {-# INLINABLE producer #-}
 
 -- | Create a `Controller` from an `Input`
-input :: Input a -> Controller a
-input = Controller
-{-# INLINABLE input #-}
+asInput :: Input a -> Controller a
+asInput = AsInput
+{-# INLINABLE asInput #-}
 
 {- $view
     `View`s represent outputs of your system.  Use `handles` and the `Monoid`
@@ -230,21 +207,6 @@ input = Controller
 > _OutF k  t       = pure t
 -}
 
-{-| An effectful sink
-
-> contramap f (v1 <> v2) = contramap f v1 <> contramap f v2
->
-> contramap f mempty = mempty
--}
-newtype View a = View (a -> IO ())
-
-instance Monoid (View a) where
-    mempty = View (\_ -> return ())
-    mappend (View write1) (View write2) = View (\a -> write1 a >> write2 a)
-
-instance Contravariant View where
-    contramap f (View k) = View (k . f)
-
 {-| Think of the type as one of the following types:
 
 > handles :: Prism'     a b -> View b -> View a
@@ -267,7 +229,7 @@ handles
     -> View b
     -- ^
     -> View a
-handles k (View send_) = View (\a -> case match a of
+handles k (AsSink send_) = AsSink (\a -> case match a of
     Nothing -> return ()
     Just b  -> send_ b )
   where
@@ -275,9 +237,9 @@ handles k (View send_) = View (\a -> case match a of
 {-# INLINABLE handles #-}
 
 -- | Convert a sink to a `View`
-sink :: (a -> IO ()) -> View a
-sink = View
-{-# INLINABLE sink #-}
+asSink :: (a -> IO ()) -> View a
+asSink = AsSink
+{-# INLINABLE asSink #-}
 
 {- $model
     `Model`s are stateful streams and they sit in between `Controller`s and
@@ -289,25 +251,15 @@ sink = View
     over `Pipe` when possible.
 -}
 
-{-| A @(Model s a b)@ converts a stream of @(a)@s into a stream of @(b)@s while
-    interacting with a state @(s)@
--}
-newtype Model s a b = FromPipe (Pipe a b (State s) ())
-
-instance Category (Model s) where
-    (FromPipe m1) . (FromPipe m2) = FromPipe (m1 <-< m2)
-
-    id = FromPipe cat
-
 {-| Convert a `Pipe` to a `Model`
 
-> pipe (p1 <-< p2) = pipe p1 . pipe p2
+> asPipe (p1 <-< p2) = asPipe p1 . asPipe p2
 >
-> pipe cat = id
+> asPipe cat = id
 -}
-pipe :: Pipe a b (State s) () -> Model s a b
-pipe = FromPipe
-{-# INLINABLE pipe #-}
+asPipe :: Pipe a b (State s) () -> Model s a b
+asPipe = AsPipe
+{-# INLINABLE asPipe #-}
 
 {-| Convert a `ListT` transformation to a `Pipe`
 
@@ -349,11 +301,11 @@ runMVC
     -- ^ Effectful output and input
     -> IO s
     -- ^ Returns final state
-runMVC initialState (FromPipe pipe_) viewController =
-    _bind viewController $ \(View send_, Controller input_) ->
+runMVC initialState (AsPipe pipe) viewController =
+    _bind viewController $ \(AsSink send_, AsInput input) ->
     flip execStateT initialState $ runEffect $
-            fromInput input_
-        >-> hoist (hoist generalize) pipe_
+            fromInput input
+        >-> hoist (hoist generalize) pipe
         >-> for cat (liftIO . send_)
 {-# INLINABLE runMVC #-}
 
@@ -367,41 +319,6 @@ runMVC initialState (FromPipe pipe_) viewController =
 
     Note that `runMVC` is the only way to consume `Managed` resources.
 -}
-
--- | A managed resource
-newtype Managed r = Managed { _bind :: forall x . (r -> IO x) -> IO x }
--- `Managed` is the same thing as `Codensity IO` or `forall x . ContT x IO`
---
--- I implement a custom type instead of reusing those types because:
---
--- * I need a non-orphan `Monoid` instance
---
--- * The name and type are simpler
-
-instance Functor Managed where
-    fmap f mx = Managed (\_return ->
-        _bind mx (\x ->
-        _return (f x) ) )
-
-instance Applicative Managed where
-    pure r    = Managed (\_return ->
-        _return r )
-    mf <*> mx = Managed (\_return ->
-        _bind mf (\f ->
-        _bind mx (\x ->
-        _return (f x) ) ) )
-
-instance Monad Managed where
-    return r = Managed (\_return ->
-        _return r )
-    ma >>= f = Managed (\_return ->
-        _bind  ma   (\a ->
-        _bind (f a) (\b ->
-        _return b ) ) )
-
-instance Monoid r => Monoid (Managed r) where
-    mempty  = pure mempty
-    mappend = liftA2 mappend
 
 -- | Created a `Managed` resource
 managed :: (forall x . (r -> IO x) -> IO x) -> Managed r
@@ -428,7 +345,7 @@ tick n = producer Single $ lift (threadDelay (truncate (n * 1000000))) >~ cat
 
 -- | Write lines to standard output
 stdoutLn :: View String
-stdoutLn = sink putStrLn
+stdoutLn = asSink putStrLn
 {-# INLINABLE stdoutLn #-}
 
 -- | Write lines to a file
@@ -436,7 +353,7 @@ toFile :: FilePath -> Managed (View String)
 toFile filePath =
     managed $ \k ->
         IO.withFile filePath IO.WriteMode $ \handle ->
-            k (sink (IO.hPutStrLn handle))
+            k (asSink (IO.hPutStrLn handle))
 {-# INLINABLE toFile #-}
 
 {- $listT
@@ -460,7 +377,7 @@ toFile filePath =
 >     InC c -> fmap OutF (modelAToD c)
 >
 > model :: Model S TotalInput TotalOutput
-> model = pipe (loop modelInToOut)
+> model = asPipe (loop modelInToOut)
 
     Sometimes you have multiple computations that handle different inputs but
     the same output, in which case you don't need to unify their outputs:
@@ -478,7 +395,7 @@ toFile filePath =
 >     InC c -> modelBToOut b
 >
 > model :: Model S TotalInput TotalOutput
-> model = pipe (loop modelInToOut)
+> model = asPipe (loop modelInToOut)
 
     Other times you have multiple computations that handle the same input but
     produce different outputs.  You can unify their outputs using the `Monoid`
@@ -497,7 +414,7 @@ toFile filePath =
 >     <> fmap OutC (modelInToC totalInput)
 >
 > model :: Model S TotalInput TotalOutput
-> model = pipe (loop modelInToOut)
+> model = asPipe (loop modelInToOut)
 
     You can also chain `ListT` computations, feeding the output of the first
     computation as the input to the next computation:
@@ -511,7 +428,7 @@ toFile filePath =
 > modelInToOut = modelInToMiddle >=> modelMiddleToOut
 >
 > model :: Model S TotalInput TotalOutput
-> model = pipe (loop modelInToOut)
+> model = asPipe (loop modelInToOut)
 
     ... or you can just use @do@ notation if you prefer.
 
@@ -522,7 +439,7 @@ toFile filePath =
 > -- Mix ListT with Pipes
 >
 > model :: Model S TotalInput TotalOutput
-> model = pipe (Pipes.takeWhile (/= C) >-> loop modelInToOut)
+> model = asPipe (Pipes.takeWhile (/= C) >-> loop modelInToOut)
 
     So promote your `ListT` logic to a `Pipe` when you need to take advantage of
     these `Pipe`-specific features.
@@ -551,10 +468,10 @@ toFile filePath =
 >     white   <- mapRGB (surfaceGetPixelFormat surface) 255 255 255
 > 
 >     let done :: View Done
->         done = sink (\Done -> SDL.quit)
+>         done = asSink (\Done -> SDL.quit)
 > 
 >         drawRect :: View Rect
->         drawRect = sink $ \rect -> do
+>         drawRect = asSink $ \rect -> do
 >             _ <- fillRect surface (Just rect) white
 >             SDL.flip surface
 > 
@@ -577,7 +494,7 @@ toFile filePath =
     The second half of the program contains the pure logic.
 
 > model :: Monad m => Model () Event (Either Rect Done)
-> model = pipe $ do
+> model = asPipe $ do
 >     Pipes.takeWhile (/= Quit) >-> (click >~ rectangle >~ Pipes.map Left)
 >     yield (Right Done)
 > 
