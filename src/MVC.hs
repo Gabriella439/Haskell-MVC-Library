@@ -64,7 +64,6 @@ module MVC (
     -- $controller
       Controller
     , asProducer
-    , asInput
 
     -- * Views
     -- $view
@@ -187,13 +186,8 @@ asProducer buffer prod = managed $ \k -> do
     let io = do
             runEffect $ prod >-> toOutput o
             atomically seal
-    withAsync io $ \_ -> k (asInput i) <* atomically seal
+    withAsync io $ \_ -> k (AsInput i) <* atomically seal
 {-# INLINABLE asProducer #-}
-
--- | Create a `Controller` from an `Input`
-asInput :: Input a -> Controller a
-asInput = AsInput
-{-# INLINABLE asInput #-}
 
 {- $view
     `View`s represent outputs of your system.  Use `handles` and the `Monoid`
