@@ -63,7 +63,7 @@ module MVC (
     -- * Controllers
     -- $controller
       Controller
-    , producer
+    , asProducer
     , asInput
 
     -- * Views
@@ -177,14 +177,14 @@ instance Monoid (Controller a) where
 
     If you're not sure what `Buffer` to use, try `Single`
 -}
-producer :: Buffer a -> Producer a IO () -> Managed (Controller a)
-producer buffer prod = managed $ \k -> do
+asProducer :: Buffer a -> Producer a IO () -> Managed (Controller a)
+asProducer buffer prod = managed $ \k -> do
     (o, i, seal) <- spawn' buffer
     let io = do
             runEffect $ prod >-> toOutput o
             atomically seal
     withAsync io $ \_ -> k (asInput i) <* atomically seal
-{-# INLINABLE producer #-}
+{-# INLINABLE asProducer #-}
 
 -- | Create a `Controller` from an `Input`
 asInput :: Input a -> Controller a
@@ -412,7 +412,7 @@ managed = Managed
 
 -- | Read lines from standard input
 stdinLines :: Managed (Controller String)
-stdinLines = producer Single Pipes.stdinLn
+stdinLines = asProducer Single Pipes.stdinLn
 {-# INLINABLE stdinLines #-}
 
 -- | Read from a `FilePath` using a `Managed` `IO.Handle`
@@ -424,12 +424,12 @@ inHandle filePath = managed (IO.withFile filePath IO.ReadMode)
 inLines :: FilePath -> Managed (Controller String)
 inLines filePath = do
     handle <- inHandle filePath
-    producer Single (Pipes.fromHandle handle)
+    asProducer Single (Pipes.fromHandle handle)
 {-# INLINABLE inLines #-}
 
 -- | Emit a values spaced by a delay in seconds
 tick :: Double -> Managed (Controller ())
-tick n = producer Single $ lift (threadDelay (truncate (n * 1000000))) >~ cat
+tick n = asProducer Single $ lift (threadDelay (truncate (n * 1000000))) >~ cat
 {-# INLINABLE tick #-}
 
 -- | Write lines to standard output
@@ -572,7 +572,7 @@ outLines filePath = do
 >         totalOut = handles _Left drawRect <> handles _Right done
 > 
 >     k $ do
->         totalIn <- producer Single (lift waitEvent >~ cat)
+>         totalIn <- asProducer Single (lift waitEvent >~ cat)
 >         return (totalOut, totalIn)
 
     Note the `join` surrounding the `managed` block.  This is because the type
