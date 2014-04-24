@@ -63,8 +63,8 @@ module MVC (
     -- * Controllers
     -- $controller
       Controller
-    , asProducer
     , asInput
+    , asProducer
 
     -- * Views
     -- $view
@@ -76,7 +76,6 @@ module MVC (
     -- $model
     , Model
     , asPipe
-    , loop
 
     -- * MVC
     -- $mvc
@@ -101,6 +100,7 @@ module MVC (
     , outShow
 
     -- *ListT
+    , loop
     -- $listT
 
     -- * Example
@@ -177,6 +177,11 @@ instance Monoid (Controller a) where
 
     mempty = AsInput mempty
 
+-- | Create a `Controller` from an `Input`
+asInput :: Input a -> Controller a
+asInput = AsInput
+{-# INLINABLE asInput #-}
+
 {-| Create a `Controller` from a `Producer`, using the given `Buffer`
 
     If you're not sure what `Buffer` to use, try `Single`
@@ -189,11 +194,6 @@ asProducer buffer prod = managed $ \k -> do
             atomically seal
     withAsync io $ \_ -> k (asInput i) <* atomically seal
 {-# INLINABLE asProducer #-}
-
--- | Create a `Controller` from an `Input`
-asInput :: Input a -> Controller a
-asInput = AsInput
-{-# INLINABLE asInput #-}
 
 {- $view
     `View`s represent outputs of your system.  Use `handles` and the `Monoid`
@@ -314,17 +314,6 @@ instance Category (Model s) where
 asPipe :: Pipe a b (State s) () -> Model s a b
 asPipe = AsPipe
 {-# INLINABLE asPipe #-}
-
-{-| Convert a `ListT` transformation to a `Pipe`
-
-> loop (k1 >=> k2) = loop k1 >-> loop k2
->
-> loop return = cat
--}
-loop :: Monad m => (a -> ListT m b) -> Pipe a b m r
-loop k = for cat (every . k)
-{-# INLINABLE loop #-}
-
 
 {- $mvc
     Connect a `Model`, `View`, and `Controller` and an initial state
@@ -467,10 +456,20 @@ outShow filePath = do
     return (asSink (IO.hPrint handle))
 {-# INLINABLE outShow #-}
 
+{-| Convert a `ListT` transformation to a `Pipe`
+
+> loop (k1 >=> k2) = loop k1 >-> loop k2
+>
+> loop return = cat
+-}
+loop :: Monad m => (a -> ListT m b) -> Pipe a b m r
+loop k = for cat (every . k)
+{-# INLINABLE loop #-}
+
 {- $listT
     `ListT` computations can be combined in more ways than `Pipe`s, so try to
     program in `ListT` as much as possible and defer converting it to a `Pipe`
-    as late as possible.
+    as late as possible using `loop`.
 
     You can combine `ListT` computations even if their inputs and outputs are
     completely different:
