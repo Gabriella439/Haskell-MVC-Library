@@ -32,11 +32,8 @@ Library
         mmorph            >= 1.0.0   && < 1.1,
         pipes             >= 4.0.0   && < 4.2,
         pipes-concurrency >= 2.0.1   && < 2.1,
-        profunctors       >= 3.2     && < 4.1,
         transformers      >= 0.2.0.0 && < 0.4 
     Exposed-Modules:
         MVC,
-        MVC.Prism
-    Other-Modules:
         MVC.Internal
     GHC-Options: -O2 -Wall
