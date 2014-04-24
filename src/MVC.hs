@@ -17,9 +17,9 @@
 >
 > external :: Managed (View String, Controller String)
 > external = do
->     c1 <- stdinLn
+>     c1 <- stdinLines
 >     c2 <- tick 1
->     return (stdoutLn, c1 <> fmap show c2)
+>     return (stdoutLines, c1 <> fmap show c2)
 >
 > model :: Model () String String
 > model = asPipe (Pipes.takeWhile (/= "quit"))
@@ -88,11 +88,13 @@ module MVC (
     , managed
 
     -- * Utilities
-    , stdinLn
-    , fromFile
+    , stdinLines
+    , inHandle
+    , inLines
     , tick
-    , stdoutLn
-    , toFile
+    , stdoutLines
+    , outHandle
+    , outLines
 
     -- *ListT
     -- $listT
@@ -113,7 +115,6 @@ import Control.Applicative (Applicative(pure, (<*>)), liftA2, (<*))
 import Control.Category (Category(..))
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (withAsync)
-import Control.Monad (join)
 import Control.Monad.Morph (generalize)
 import Control.Monad.Trans.State.Strict (State, execStateT)
 import Data.Functor.Constant (Constant(Constant, getConstant))
@@ -410,17 +411,21 @@ managed = Managed
 {-# INLINABLE managed #-}
 
 -- | Read lines from standard input
-stdinLn :: Managed (Controller String)
-stdinLn = producer Single Pipes.stdinLn
-{-# INLINABLE stdinLn #-}
+stdinLines :: Managed (Controller String)
+stdinLines = producer Single Pipes.stdinLn
+{-# INLINABLE stdinLines #-}
+
+-- | Read from a `FilePath` using a `Managed` `IO.Handle`
+inHandle :: FilePath -> Managed IO.Handle
+inHandle filePath = managed (IO.withFile filePath IO.ReadMode)
+{-# INLINABLE inHandle #-}
 
 -- | Read lines from a file
-fromFile :: FilePath -> Managed (Controller String)
-fromFile filePath =
-    join $ managed $ \k ->
-        IO.withFile filePath IO.ReadMode $ \handle ->
-            (k (producer Single (Pipes.fromHandle handle)))
-{-# INLINABLE fromFile #-}
+inLines :: FilePath -> Managed (Controller String)
+inLines filePath = do
+    handle <- inHandle filePath
+    producer Single (Pipes.fromHandle handle)
+{-# INLINABLE inLines #-}
 
 -- | Emit a values spaced by a delay in seconds
 tick :: Double -> Managed (Controller ())
@@ -428,17 +433,21 @@ tick n = producer Single $ lift (threadDelay (truncate (n * 1000000))) >~ cat
 {-# INLINABLE tick #-}
 
 -- | Write lines to standard output
-stdoutLn :: View String
-stdoutLn = asSink putStrLn
-{-# INLINABLE stdoutLn #-}
+stdoutLines :: View String
+stdoutLines = asSink putStrLn
+{-# INLINABLE stdoutLines #-}
+
+-- | Write to a `FilePath` using a `Managed` `IO.Handle`
+outHandle :: FilePath -> Managed IO.Handle
+outHandle filePath = managed (IO.withFile filePath IO.WriteMode)
+{-# INLINABLE outHandle #-}
 
 -- | Write lines to a file
-toFile :: FilePath -> Managed (View String)
-toFile filePath =
-    managed $ \k ->
-        IO.withFile filePath IO.WriteMode $ \handle ->
-            k (asSink (IO.hPutStrLn handle))
-{-# INLINABLE toFile #-}
+outLines :: FilePath -> Managed (View String)
+outLines filePath = do
+    handle <- outHandle filePath
+    return (asSink (IO.hPutStrLn handle))
+{-# INLINABLE outLines #-}
 
 {- $listT
     `ListT` computations can be combined in more ways than `Pipe`s, so try to
