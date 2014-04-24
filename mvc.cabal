@@ -33,5 +33,7 @@ Library
         pipes             >= 4.0.0   && < 4.2,
         pipes-concurrency >= 2.0.1   && < 2.1,
         transformers      >= 0.2.0.0 && < 0.4 
-    Exposed-Modules: MVC
+    Exposed-Modules:
+        MVC,
+        MVC.Prelude
     GHC-Options: -O2 -Wall
