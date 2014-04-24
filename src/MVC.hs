@@ -87,14 +87,18 @@ module MVC (
     , Managed
     , managed
 
-    -- * Utilities
+    -- * Utility Controllers
     , stdinLines
     , inHandle
     , inLines
+    , inRead
     , tick
+
+    -- * Utility Views
     , stdoutLines
     , outHandle
     , outLines
+    , outShow
 
     -- *ListT
     -- $listT
@@ -427,6 +431,13 @@ inLines filePath = do
     asProducer Single (Pipes.fromHandle handle)
 {-# INLINABLE inLines #-}
 
+-- | 'read' values from a file
+inRead :: Read a => FilePath -> Managed (Controller a)
+inRead filePath = do
+    handle <- inHandle filePath
+    asProducer Single (Pipes.fromHandle handle >-> Pipes.read)
+{-# INLINABLE inRead #-}
+
 -- | Emit a values spaced by a delay in seconds
 tick :: Double -> Managed (Controller ())
 tick n = asProducer Single $ lift (threadDelay (truncate (n * 1000000))) >~ cat
@@ -448,6 +459,13 @@ outLines filePath = do
     handle <- outHandle filePath
     return (asSink (IO.hPutStrLn handle))
 {-# INLINABLE outLines #-}
+
+-- | 'show' values to a file
+outShow :: Show a => FilePath -> Managed (View a)
+outShow filePath = do
+    handle <- outHandle filePath
+    return (asSink (IO.hPrint handle))
+{-# INLINABLE outShow #-}
 
 {- $listT
     `ListT` computations can be combined in more ways than `Pipe`s, so try to
