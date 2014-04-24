@@ -603,7 +603,7 @@ loop k = for cat (every . k)
 
     The second half of the program contains the pure logic.
 
-> model :: Monad m => Model () Event (Either Rect Done)
+> model :: Model () Event (Either Rect Done)
 > model = asPipe $ do
 >     Pipes.takeWhile (/= Quit) >-> (click >~ rectangle >~ Pipes.map Left)
 >     yield (Right Done)
