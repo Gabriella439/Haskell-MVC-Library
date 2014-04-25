@@ -65,14 +65,14 @@ module MVC (
     -- * Controllers
     -- $controller
       Controller
-    , keeps
     , asInput
+    , keeps
 
     -- * Views
     -- $view
     , View
-    , handles
     , asSink
+    , handles
 
     -- * Models
     -- $model
@@ -159,6 +159,11 @@ instance Monoid (Controller a) where
 
     mempty = AsInput mempty
 
+-- | Create a `Controller` from an `Input`
+asInput :: Input a -> Controller a
+asInput = AsInput
+{-# INLINABLE asInput #-}
+
 {-| Think of the type as one of the following types:
 
 > keeps :: Prism'     a b -> Controller a -> Controller b
@@ -192,11 +197,6 @@ keeps k (AsInput (Input recv_)) = AsInput (Input recv_')
                 Just b  -> return (Just b)
     match = M.getFirst . getConstant . k (Constant . M.First . Just)
 {-# INLINABLE keeps #-}
-
--- | Create a `Controller` from an `Input`
-asInput :: Input a -> Controller a
-asInput = AsInput
-{-# INLINABLE asInput #-}
 
 {- $view
     `View`s represent outputs of your system.  Use `handles` and the `Monoid`
@@ -254,6 +254,11 @@ instance Monoid (View a) where
 instance Contravariant View where
     contramap f (AsSink k) = AsSink (k . f)
 
+-- | Create a `View` from a sink
+asSink :: (a -> IO ()) -> View a
+asSink = AsSink 
+{-# INLINABLE asSink #-}
+
 {-| Think of the type as one of the following types:
 
 > handles :: Prism'     a b -> View b -> View a
@@ -283,11 +288,6 @@ handles k (AsSink send_) = AsSink (\a -> case match a of
     match = M.getFirst . getConstant . k (Constant . M.First . Just)
 {-# INLINABLE handles #-}
 
--- | Convert a sink to a `View`
-asSink :: (a -> IO ()) -> View a
-asSink = AsSink 
-{-# INLINABLE asSink #-}
-
 {- $model
     `Model`s are stateful streams and they sit in between `Controller`s and
     `View`s.
@@ -308,7 +308,7 @@ instance Category (Model s) where
 
     id = AsPipe cat
 
-{-| Convert a `Pipe` to a `Model`
+{-| Create a `Model` from a `Pipe`
 
 > asPipe (p1 <-< p2) = asPipe p1 . asPipe p2
 >
@@ -406,7 +406,7 @@ managed :: (forall x . (r -> IO x) -> IO x) -> Managed r
 managed = Managed
 {-# INLINABLE managed #-}
 
-{-| Convert a `ListT` transformation to a `Pipe`
+{-| Create a `Pipe` from a `ListT` transformation
 
 > loop (k1 >=> k2) = loop k1 >-> loop k2
 >
@@ -499,7 +499,10 @@ loop k = for cat (every . k)
 > -- Mix ListT with Pipes
 >
 > model :: Model S TotalInput TotalOutput
-> model = asPipe (Pipes.takeWhile (/= C) >-> loop modelInToOut)
+> model = asPipe (Pipes.takeWhile (not . isC)) >-> loop modelInToOut)
+>   where
+>     isC (InC _) = True
+>     isC  _      = False
 
     So promote your `ListT` logic to a `Pipe` when you need to take advantage of
     these `Pipe`-specific features.
