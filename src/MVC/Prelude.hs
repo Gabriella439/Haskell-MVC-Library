@@ -139,7 +139,7 @@ outHandle filePath = managed (IO.withFile filePath IO.WriteMode)
 > data Done = Done deriving (Eq, Show)
 > 
 > sdl :: Managed (View (Either Rect Done), Controller Event)
-> sdl = join $ managed $ \k -> withInit [InitEverything] $ do
+> sdl = join $ managed $ \k -> withInit [InitVideo, InitEventthread] $ do
 >     surface <- setVideoMode 640 480 32 [SWSurface]
 >     white   <- mapRGB (surfaceGetPixelFormat surface) 255 255 255
 > 
@@ -169,8 +169,8 @@ outHandle filePath = managed (IO.withFile filePath IO.WriteMode)
 
     The second half of the program contains the pure logic.
 
-> model :: Model () Event (Either Rect Done)
-> model = asPipe $ do
+> pipe :: Monad m => Pipe Event (Either Rect Done) m ()
+> pipe = do
 >     Pipes.takeWhile (/= Quit) >-> (click >~ rectangle >~ Pipes.map Left)
 >     yield (Right Done)
 > 
@@ -193,7 +193,7 @@ outHandle filePath = managed (IO.withFile filePath IO.WriteMode)
 >         _ -> click
 > 
 > main :: IO ()
-> main = runMVC () model sdl
+> main = runMVC () (asPipe pipe) sdl
 
     Run the program to verify that clicks create rectangles.
 
@@ -201,13 +201,13 @@ outHandle filePath = managed (IO.withFile filePath IO.WriteMode)
     program purely, either manually:
 
 >>> let leftClick (x, y) = MouseButtonDown x y ButtonLeft
->>> Pipes.toList (each [leftClick (10, 10), leftClick (15, 16), Quit] >-> model)
+>>> Pipes.toList (each [leftClick (10, 10), leftClick (15, 16), Quit] >-> pipe)
 [Left (Rect {rectX = 10, rectY = 10, rectW = 5, rectH = 6}),Right Done]
 
     ... or automatically using property-based testing (such as @QuickCheck@):
 
 >>> import Test.QuickCheck
->>> quickCheck $ \xs -> length (Pipes.toList (each (map leftClick xs) >-> model)) == length xs `div` 2
+>>> quickCheck $ \xs -> length (Pipes.toList (each (map leftClick xs) >-> pipe)) == length xs `div` 2
 +++ OK, passed 100 tests.
 
     Equally important, you can formally prove properties about your model using
