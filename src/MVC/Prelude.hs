@@ -158,8 +158,8 @@ outHandle filePath = managed (IO.withFile filePath IO.WriteMode)
 >         totalIn <- producer Single (lift waitEvent >~ cat)
 >         return (totalOut, totalIn)
 
-    Note the `join` surrounding the `managed` block.  This is because the type
-    before `join` is:
+    Note the `Control.Monad.join` surrounding the `managed` block.  This is
+    because the type before `Control.Monad.join` is:
 
 > Managed (Managed (View (Either Rect Done), Controller Event))
 

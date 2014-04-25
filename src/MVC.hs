@@ -165,7 +165,7 @@ instance Monoid (Controller a) where
 > keeps :: Traversal' a b -> Controller a -> Controller b
 
     @(keeps prism controller)@ only emits values if the @prism@ matches the
-    @controller@'s input.
+    @controller@'s output.
 
 > keeps (p1 . p2) = keeps p2 . keeps p1
 >
