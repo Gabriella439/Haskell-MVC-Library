@@ -13,6 +13,7 @@ module MVC.Prelude (
     , tick
 
     -- * Views
+    , consumer
     , stdoutLines
     , outLines
     , outShow
@@ -28,7 +29,9 @@ module MVC.Prelude (
 import Control.Applicative (pure, (<*))
 import Control.Concurrent.Async (withAsync)
 import Control.Concurrent (threadDelay)
+import Data.IORef (newIORef, readIORef, writeIORef)
 import MVC
+import Pipes.Internal (Proxy(..), closed)
 import qualified Pipes.Prelude as Pipes
 import qualified System.IO as IO
 
@@ -71,6 +74,20 @@ tick :: Double -> Managed (Controller ())
 tick n = producer Single $ lift (threadDelay (truncate (n * 1000000))) >~ cat
 {-# INLINABLE tick #-}
 
+-- | Create a `View` from a `Consumer`
+consumer :: Consumer a IO () -> Managed (View a)
+consumer cons0 = managed $ \k -> do
+    ref <- newIORef cons0
+    k $ asSink $ \a -> do
+        cons <- readIORef ref
+        let go cons_ = case cons_ of
+                Request () fa -> writeIORef ref (fa a)
+                Respond v  _  -> closed v
+                M          m  -> m >>= go
+                Pure    r     -> writeIORef ref (return r)
+        go cons
+{-# INLINABLE consumer #-}
+    
 -- | Write lines to standard output
 stdoutLines :: View String
 stdoutLines = asSink putStrLn
