@@ -14,13 +14,14 @@
     the core types and concepts:
 
 > import MVC
+> import qualified MVC.Prelude as MVC
 > import qualified Pipes.Prelude as Pipes
 >
 > external :: Managed (View String, Controller String)
 > external = do
->     c1 <- stdinLines
->     c2 <- tick 1
->     return (stdoutLines, c1 <> fmap show c2)
+>     c1 <- MVC.stdinLines
+>     c2 <- MVC.tick 1
+>     return (MVC.stdoutLines, c1 <> fmap show c2)
 >
 > model :: Model () String String
 > model = asPipe (Pipes.takeWhile (/= "quit"))
@@ -64,6 +65,7 @@ module MVC (
     -- * Controllers
     -- $controller
       Controller
+    , keeps
     , asInput
 
     -- * Views
@@ -157,6 +159,40 @@ instance Monoid (Controller a) where
 
     mempty = AsInput mempty
 
+{-| Think of the type as one of the following types:
+
+> keeps :: Prism'     a b -> Controller a -> Controller b
+> keeps :: Traversal' a b -> Controller a -> Controller b
+
+    @(keeps prism controller)@ only emits values if the @prism@ matches the
+    @controller@'s input.
+
+> keeps (p1 . p2) = keeps p2 . keeps p1
+>
+> keeps id = id
+
+> keeps p (c1 <> c2) = keeps p c1 <> keeps p c2
+>
+> keeps p mempty = mempty
+-}
+keeps
+    :: ((b -> Constant (First b) b) -> (a -> Constant (First b) a))
+    -- ^
+    -> Controller a
+    -- ^
+    -> Controller b
+keeps k (AsInput (Input recv_)) = AsInput (Input recv_')
+  where
+    recv_' = do
+        ma <- recv_
+        case ma of
+            Nothing -> return Nothing
+            Just a  -> case match a of
+                Nothing -> recv_'
+                Just b  -> return (Just b)
+    match = M.getFirst . getConstant . k (Constant . M.First . Just)
+{-# INLINABLE keeps #-}
+
 -- | Create a `Controller` from an `Input`
 asInput :: Input a -> Controller a
 asInput = AsInput
@@ -224,15 +260,15 @@ instance Contravariant View where
 > handles :: Traversal' a b -> View b -> View a
 
     @(handles prism view)@ only runs the @view@ if the @prism@ matches the
-    @view@'s input.
+    input.
 
 > handles (p1 . p2) = handles p1 . handles p2
 >
 > handles id = id
 
-> handles f (v1 <> v2) = handles f v1 <> handles f v2
+> handles p (v1 <> v2) = handles p v1 <> handles p v2
 >
-> handles f mempty = mempty
+> handles p mempty = mempty
 -}
 handles
     :: ((b -> Constant (First b) b) -> (a -> Constant (First b) a))
@@ -470,7 +506,7 @@ loop k = for cat (every . k)
 -}
 
 {- $reexports
-    "Data.Functor.Constant" re-exports `Constant` (the type only)
+    "Data.Functor.Constant" re-exports `Constant`
 
     "Data.Functor.Contravariant" re-exports `Contravariant`
 

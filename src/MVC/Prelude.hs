@@ -25,7 +25,7 @@ module MVC.Prelude (
     -- $example
     ) where
 
-import Control.Applicative ((<*))
+import Control.Applicative (pure, (<*))
 import Control.Concurrent.Async (withAsync)
 import Control.Concurrent (threadDelay)
 import MVC
@@ -59,12 +59,14 @@ inLines filePath = do
 
 -- | 'read' values from a file, one value per line, skipping failed parses
 inRead :: Read a => FilePath -> Managed (Controller a)
-inRead filePath = do
-    handle <- inHandle filePath
-    producer Single (Pipes.fromHandle handle >-> Pipes.read)
+inRead filePath = fmap (keeps parsed) (inLines filePath)
+  where
+    parsed k str = case reads str of
+        [(a, "")] -> Constant (getConstant (k a))
+        _         -> pure str
 {-# INLINABLE inRead #-}
 
--- | Emit a values spaced by a delay in seconds
+-- | Emit empty values spaced by a delay in seconds
 tick :: Double -> Managed (Controller ())
 tick n = producer Single $ lift (threadDelay (truncate (n * 1000000))) >~ cat
 {-# INLINABLE tick #-}
