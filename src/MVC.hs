@@ -36,11 +36,11 @@
 
     * A `View` that writes lines to standard output
 
-    * A pure `Model`, which forwards lines until the user inputs @"quit"@
+    * A pure `Model`, which forwards lines until the user inputs \"quit\"
 
     'runMVC' connects them into a complete program, which outputs a @()@ every
     second and also echoes standard input to standard output until the user
-    enters @"quit"@:
+    enters \"quit\":
 
 >>> main
 ()
