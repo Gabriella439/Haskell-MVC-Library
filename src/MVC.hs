@@ -55,8 +55,9 @@ quit<enter>
 >>>
 
     The following sections give extended guidance for how to structure @mvc@
-    programs.  Additionally, there is a more elaborate code example using the
-    @sdl@ library in the "MVC.Prelude" module.
+    programs.  Additionally, there is an "MVC.Prelude" module, which provides
+    several utilities and provides a more elaborate code example using the
+    @sdl@ library.
 -}
 
 {-# LANGUAGE RankNTypes #-}
@@ -296,6 +297,10 @@ handles k (AsSink send_) = AsSink (\a -> case match a of
 
     Read the \"ListT\" section which describes why you should prefer `ListT`
     over `Pipe` when possible.
+
+    Also, try to defer converting your `Pipe` to a `Model` until you call
+    `runMVC`, because the conversion is not reversible and `Pipe` is strictly
+    more featureful than `Model`.
 -}
 
 {-| A @(Model s a b)@ converts a stream of @(a)@s into a stream of @(b)@s while
@@ -435,9 +440,6 @@ loop k = for cat (every . k)
 >     InA a -> fmap OutD (modelAToD a)
 >     InB b -> fmap OutE (modelAToD b)
 >     InC c -> fmap OutF (modelAToD c)
->
-> model :: Model S TotalInput TotalOutput
-> model = asPipe (loop modelInToOut)
 
     Sometimes you have multiple computations that handle different inputs but
     the same output, in which case you don't need to unify their outputs:
@@ -453,9 +455,6 @@ loop k = for cat (every . k)
 >     InA a -> modelAToOut a
 >     InB b -> modelBToOut b
 >     InC c -> modelBToOut b
->
-> model :: Model S TotalInput TotalOutput
-> model = asPipe (loop modelInToOut)
 
     Other times you have multiple computations that handle the same input but
     produce different outputs.  You can unify their outputs using the `Monoid`
@@ -472,9 +471,6 @@ loop k = for cat (every . k)
 >        fmap OutA (modelInToA totalInput)
 >     <> fmap OutB (modelInToB totalInput)
 >     <> fmap OutC (modelInToC totalInput)
->
-> model :: Model S TotalInput TotalOutput
-> model = asPipe (loop modelInToOut)
 
     You can also chain `ListT` computations, feeding the output of the first
     computation as the input to the next computation:
@@ -486,9 +482,6 @@ loop k = for cat (every . k)
 >
 > modelInToOut :: TotalInput -> ListT (State S) TotalOutput
 > modelInToOut = modelInToMiddle >=> modelMiddleToOut
->
-> model :: Model S TotalInput TotalOutput
-> model = asPipe (loop modelInToOut)
 
     ... or you can just use @do@ notation if you prefer.
 
@@ -498,8 +491,8 @@ loop k = for cat (every . k)
 
 > -- Mix ListT with Pipes
 >
-> model :: Model S TotalInput TotalOutput
-> model = asPipe (Pipes.takeWhile (not . isC)) >-> loop modelInToOut)
+> pipe :: Pipe TotalInput TotalOutput (State S) ()
+> pipe = Pipes.takeWhile (not . isC)) >-> loop modelInToOut
 >   where
 >     isC (InC _) = True
 >     isC  _      = False
