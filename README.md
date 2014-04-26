@@ -36,7 +36,7 @@ Optionally begin from this program skeleton:
 ## Features
 
 * *Determinism*: Perform property-based testing on your model (like
-  @QuickCheck@)
+  `QuickCheck`)
 
 * *Purity*: Move a substantial amount of your application logic into pure code
 
