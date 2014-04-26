@@ -14,7 +14,8 @@ to learn how to practically apply theory to tame large applications.
 * Install the [Haskell Platform](http://www.haskell.org/platform/)
 * `cabal install mvc`
 * Read the documentation in the `MVC` module and the `MVC.Prelude` module
-* Optionally begin from this program skeleton:
+
+Optionally begin from this program skeleton:
 
     import MVC
     import qualified MVC.Prelude as MVC
