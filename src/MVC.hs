@@ -1,3 +1,5 @@
+{-# LANGUAGE FlexibleInstances #-}
+
 {-| Use the `Model` - `View` - `Controller` pattern to separate impure inputs
     and outputs from pure application logic so that you can:
 
@@ -112,6 +114,7 @@ import Data.Functor.Contravariant (Contravariant(contramap))
 import Data.Monoid (Monoid(mempty, mappend, mconcat), (<>), First)
 import qualified Data.Monoid as M
 import Pipes
+import Pipes.Core ((<+<), pull)
 import Pipes.Concurrent
 
 import Prelude hiding ((.), id)
@@ -311,12 +314,14 @@ handles k (AsSink send_) = AsSink (\a -> case match a of
 {-| A @(Model s a b)@ converts a stream of @(a)@s into a stream of @(b)@s while
     interacting with a state @(s)@
 -}
-newtype Model s a b = AsPipe (Pipe a b (State s) ())
+type Model s a b = Model' s () () a b
 
-instance Category (Model s) where
-    (AsPipe m1) . (AsPipe m2) = AsPipe (m1 <-< m2)
+newtype Model' s a' b' a b = AsPipe (b' -> Proxy a' a b' b (State s) ())
 
-    id = AsPipe cat
+instance Category (Model' s () ()) where
+    (AsPipe m1) . (AsPipe m2) = AsPipe (m1 <+< m2)
+
+    id = AsPipe pull
 
 {-| Create a `Model` from a `Pipe`
 
@@ -325,7 +330,7 @@ instance Category (Model s) where
 > asPipe cat = id
 -}
 asPipe :: Pipe a b (State s) () -> Model s a b
-asPipe = AsPipe
+asPipe p = AsPipe (\() -> p)
 {-# INLINABLE asPipe #-}
 
 {- $mvc
@@ -361,7 +366,7 @@ runMVC initialState (AsPipe pipe) viewController =
     _bind viewController $ \(AsSink sink, AsInput input) ->
     flip execStateT initialState $ runEffect $
             fromInput input
-        >-> hoist (hoist generalize) pipe
+        >-> hoist (hoist generalize) (pipe ())
         >-> for cat (liftIO . sink)
 {-# INLINABLE runMVC #-}
 
