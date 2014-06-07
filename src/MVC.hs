@@ -406,6 +406,9 @@ instance Monoid r => Monoid (Managed r) where
     mempty  = pure mempty
     mappend = liftA2 mappend
 
+instance MonadIO Managed where
+    liftIO m = Managed (m >>=)
+
 -- | Created a `Managed` resource
 managed :: (forall x . (r -> IO x) -> IO x) -> Managed r
 managed = Managed
