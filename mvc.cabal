@@ -4,7 +4,7 @@ Cabal-Version: >=1.8.0.2
 Build-Type: Simple
 License: BSD3
 License-File: LICENSE
-Copyright: 2013 Gabriel Gonzalez
+Copyright: 2014 Gabriel Gonzalez
 Author: Gabriel Gonzalez
 Maintainer: Gabriel439@gmail.com
 Bug-Reports: https://github.com/Gabriel439/Haskell-MVC-Library/issues
