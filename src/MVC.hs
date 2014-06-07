@@ -71,6 +71,7 @@ module MVC (
 
     -- * Views
     -- $view
+    , View'
     , View
     , asSink
     , handles
@@ -245,14 +246,17 @@ keeps k (AsInput (Input recv_)) = AsInput (Input recv_')
 >
 > contramap f mempty = mempty
 -}
-newtype View a = AsSink (a -> IO ())
+newtype View' m a = AsSink (a -> IO m)
 
-instance Monoid (View a) where
-    mempty = AsSink (\_ -> return ())
+-- | The common case where a `View` returns @()@
+type View = View' ()
+
+instance Monoid m => Monoid (View' m a) where
+    mempty = AsSink (pure (pure mempty))
     mappend (AsSink write1) (AsSink write2) =
-        AsSink (\a -> write1 a >> write2 a)
+        AsSink (liftA2 (liftA2 mappend) write1 write2)
 
-instance Contravariant View where
+instance Contravariant (View' m) where
     contramap f (AsSink k) = AsSink (k . f)
 
 -- | Create a `View` from a sink
@@ -262,8 +266,8 @@ asSink = AsSink
 
 {-| Think of the type as one of the following types:
 
-> handles :: Prism'     a b -> View b -> View a
-> handles :: Traversal' a b -> View b -> View a
+> handles :: Monoid m => Prism'     a b -> View b -> View a
+> handles :: Monoid m => Traversal' a b -> View b -> View a
 
     @(handles prism view)@ only runs the @view@ if the @prism@ matches the
     input.
@@ -277,13 +281,14 @@ asSink = AsSink
 > handles p mempty = mempty
 -}
 handles
-    :: ((b -> Constant (First b) b) -> (a -> Constant (First b) a))
+    :: Monoid m
+    => ((b -> Constant (First b) b) -> (a -> Constant (First b) a))
     -- ^
-    -> View b
+    -> View' m b
     -- ^
-    -> View a
+    -> View' m a
 handles k (AsSink send_) = AsSink (\a -> case match a of
-    Nothing -> return ()
+    Nothing -> return mempty
     Just b  -> send_ b )
   where
     match = M.getFirst . getConstant . k (Constant . M.First . Just)
