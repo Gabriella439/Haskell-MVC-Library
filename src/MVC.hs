@@ -86,6 +86,7 @@ module MVC (
     -- * MVC
     -- $mvc
     , runMVC
+    , runMVC'
 
     -- * Managed resources
     -- $managed
@@ -263,7 +264,7 @@ instance Contravariant (View' m) where
     contramap f (AsSink k) = AsSink (k . f)
 
 -- | Create a `View` from a sink
-asSink :: (a -> IO ()) -> View a
+asSink :: (a -> IO m) -> View' m a
 asSink = AsSink 
 {-# INLINABLE asSink #-}
 
@@ -330,8 +331,8 @@ instance Category (Model' s () ()) where
 >
 > asPipe cat = id
 -}
-asPipe :: Pipe a b (State s) () -> Model s a b
-asPipe p = AsPipe (\() -> p)
+asPipe :: Proxy a' a b' b (State s) () -> Model' s a' b' a b
+asPipe p = AsPipe (\_ -> p)
 {-# INLINABLE asPipe #-}
 
 {- $mvc
