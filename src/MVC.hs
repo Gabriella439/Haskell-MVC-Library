@@ -316,6 +316,7 @@ handles k (AsSink send_) = AsSink (\a -> case match a of
 -}
 type Model s a b = Model' s () () a b
 
+-- | Like `Model`, except supporting bidirectional communication
 newtype Model' s a' b' a b = AsPipe (b' -> Proxy a' a b' b (State s) ())
 
 instance Category (Model' s () ()) where
@@ -362,13 +363,25 @@ runMVC
     -- ^ Effectful output and input
     -> IO s
     -- ^ Returns final state
-runMVC initialState (AsPipe pipe) viewController =
+runMVC = runMVC'
+{-# INLINABLE runMVC #-}
+
+runMVC'
+    :: Monoid b'
+    => s
+    -- ^ Initial state
+    -> Model' s () b' a b
+    -- ^ Program logic
+    -> Managed (View' b' b, Controller a)
+    -- ^ Effectful output and input
+    -> IO s
+    -- ^ Returns final state
+runMVC' initialState (AsPipe pipe) viewController =
     _bind viewController $ \(AsSink sink, AsInput input) ->
     flip execStateT initialState $ runEffect $
-            fromInput input
-        >-> hoist (hoist generalize) (pipe ())
-        >-> for cat (liftIO . sink)
-{-# INLINABLE runMVC #-}
+        for (fromInput input >-> hoist (hoist generalize) (pipe mempty))
+            (liftIO . sink)
+{-# INLINABLE runMVC' #-}
 
 {- $managed
     Use `managed` to create primitive `Managed` resources and use the `Functor`,
