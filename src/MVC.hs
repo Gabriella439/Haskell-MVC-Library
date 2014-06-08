@@ -80,6 +80,7 @@ module MVC (
 
     -- * Models
     -- $model
+    , Model'
     , Model
     , asPipe
 
