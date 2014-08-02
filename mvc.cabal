@@ -28,7 +28,7 @@ Library
     Build-Depends:
         base              >= 4       && < 5  ,
         async             >= 2.0.0   && < 2.1,
-        contravariant                   < 0.5,
+        contravariant                   < 1.2,
         mmorph            >= 1.0.2   && < 1.1,
         pipes             >= 4.1.0   && < 4.2,
         pipes-concurrency >= 2.0.1   && < 2.1,
