@@ -77,15 +77,22 @@ tick n = producer Single $ lift (threadDelay (truncate (n * 1000000))) >~ cat
 -- | Create a `View` from a `Consumer`
 consumer :: Consumer a IO () -> Managed (View a)
 consumer cons0 = managed $ \k -> do
-    ref <- newIORef cons0
+    mf0 <- nextRequest cons0
+    ref <- newIORef mf0
     k $ asSink $ \a -> do
-        cons <- readIORef ref
-        let go cons_ = case cons_ of
-                Request () fa -> writeIORef ref (fa a)
-                Respond v  _  -> closed v
-                M          m  -> m >>= go
-                Pure    r     -> writeIORef ref (return r)
-        go cons
+        mf <- readIORef ref
+        case mf of
+            Nothing -> return ()
+            Just f  -> do
+                mf' <- nextRequest (f a)
+                writeIORef ref mf'
+  where
+    nextRequest :: Consumer a IO () -> IO (Maybe (a -> Consumer a IO ()))
+    nextRequest cons = case cons of
+        Request () fa -> return (Just fa)
+        Respond v  _  -> closed v
+        M          m  -> m >>= nextRequest
+        Pure       () -> return Nothing
 {-# INLINABLE consumer #-}
     
 -- | Write lines to standard output
