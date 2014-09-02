@@ -102,8 +102,8 @@ module MVC (
     , module Pipes.Concurrent
     ) where
 
-import Control.Applicative (Applicative(pure, (<*>)), liftA2)
 import Control.Category (Category(..))
+import Control.Monad.Managed (Managed, managed, with)
 import Control.Monad.Morph (generalize)
 import Control.Monad.Trans.State.Strict (State, execStateT)
 import Data.Functor.Constant (Constant(Constant, getConstant))
@@ -353,7 +353,7 @@ runMVC
     -> IO s
     -- ^ Returns final state
 runMVC initialState (AsPipe pipe) viewController =
-    _bind viewController $ \(AsSink sink, AsInput input) ->
+    with viewController $ \(AsSink sink, AsInput input) ->
     flip execStateT initialState $ runEffect $
             fromInput input
         >-> hoist (hoist generalize) pipe
@@ -367,52 +367,7 @@ runMVC initialState (AsPipe pipe) viewController =
 
     See the source code for the \"Utilities\" section below for several examples
     of how to create `Managed` resources.
-
-    Note that `runMVC` is the only way to consume `Managed` resources.
 -}
-
--- | A managed resource
-newtype Managed r = Managed { _bind :: forall x . (r -> IO x) -> IO x }
--- `Managed` is the same thing as `Codensity IO` or `forall x . ContT x IO`
---
--- I implement a custom type instead of reusing those types because:
---
--- * I need a non-orphan `Monoid` instance
---
--- * The name and type are simpler
-
-instance Functor Managed where
-    fmap f mx = Managed (\_return ->
-        _bind mx (\x ->
-        _return (f x) ) )
-
-instance Applicative Managed where
-    pure r    = Managed (\_return ->
-        _return r )
-    mf <*> mx = Managed (\_return ->
-        _bind mf (\f ->
-        _bind mx (\x ->
-        _return (f x) ) ) )
-
-instance Monad Managed where
-    return r = Managed (\_return ->
-        _return r )
-    ma >>= f = Managed (\_return ->
-        _bind  ma   (\a ->
-        _bind (f a) (\b ->
-        _return b ) ) )
-
-instance Monoid r => Monoid (Managed r) where
-    mempty  = pure mempty
-    mappend = liftA2 mappend
-
-instance MonadIO Managed where
-    liftIO m = Managed (m >>=)
-
--- | Created a `Managed` resource
-managed :: (forall x . (r -> IO x) -> IO x) -> Managed r
-managed = Managed
-{-# INLINABLE managed #-}
 
 {-| Create a `Pipe` from a `ListT` transformation
 
