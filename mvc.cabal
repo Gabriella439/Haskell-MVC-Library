@@ -1,5 +1,5 @@
 Name: mvc
-Version: 1.0.2
+Version: 1.0.3
 Cabal-Version: >=1.8.0.2
 Build-Type: Simple
 License: BSD3
@@ -33,7 +33,7 @@ Library
         mmorph            >= 1.0.2   && < 1.1,
         pipes             >= 4.1.0   && < 4.2,
         pipes-concurrency >= 2.0.1   && < 2.1,
-        transformers      >= 0.2.0.0 && < 0.4 
+        transformers      >= 0.2.0.0 && < 0.5.0.0
     Exposed-Modules:
         MVC,
         MVC.Prelude
