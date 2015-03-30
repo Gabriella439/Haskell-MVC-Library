@@ -69,7 +69,6 @@ module MVC (
       Controller(..)
     , asInput
     , keeps
-    , finally
 
     -- * Views
     -- $view
@@ -169,13 +168,6 @@ instance Monoid (Controller a) where
 instance Applicative Controller where
     pure r    = AsInput (pure r)
     (AsInput mf) <*> (AsInput mx) = AsInput (mf <*> mx)
-
-finally :: Controller a -> Controller a -> Controller a
-finally (AsInput c0) (AsInput c1) = AsInput (Input $ do
-        r0 <- recv c0
-        case r0 of
-            Nothing -> recv c1
-            Just a  -> return (Just a))
 
 -- | Create a `Controller` from an `Input`
 asInput :: Input a -> Controller a
