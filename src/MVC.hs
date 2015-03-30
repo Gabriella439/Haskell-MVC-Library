@@ -61,17 +61,18 @@ quit<enter>
 -}
 
 {-# LANGUAGE RankNTypes #-}
+{-# language NoMonomorphismRestriction #-}
 
 module MVC (
     -- * Controllers
     -- $controller
-      Controller
+      Controller(..)
     , asInput
     , keeps
 
     -- * Views
     -- $view
-    , View
+    , View(..)
     , asSink
     , handles
 
@@ -79,6 +80,8 @@ module MVC (
     -- $model
     , Model
     , asPipe
+    , asGetter
+    , asFold
 
     -- * MVC
     -- $mvc
@@ -103,15 +106,17 @@ module MVC (
     ) where
 
 import Control.Category (Category(..))
+import Control.Applicative
 import Control.Monad.Managed (Managed, managed, with)
 import Control.Monad.Morph (generalize)
-import Control.Monad.Trans.State.Strict (State, execStateT)
+import Control.Monad.Trans.State.Strict (State, StateT, execStateT)
 import Data.Functor.Constant (Constant(Constant, getConstant))
 import Data.Functor.Contravariant (Contravariant(contramap))
 import Data.Monoid (Monoid(mempty, mappend, mconcat), (<>), First)
 import qualified Data.Monoid as M
 import Pipes
 import Pipes.Concurrent
+import qualified Pipes.Prelude as Pipes
 
 import Prelude hiding ((.), id)
 
@@ -159,6 +164,10 @@ instance Monoid (Controller a) where
     mappend (AsInput i1) (AsInput i2) = AsInput (mappend i1 i2)
 
     mempty = AsInput mempty
+
+instance Applicative Controller where
+    pure r    = AsInput (pure r)
+    (AsInput mf) <*> (AsInput mx) = AsInput (mf <*> mx)
 
 -- | Create a `Controller` from an `Input`
 asInput :: Input a -> Controller a
@@ -257,7 +266,7 @@ instance Contravariant View where
 
 -- | Create a `View` from a sink
 asSink :: (a -> IO ()) -> View a
-asSink = AsSink 
+asSink = AsSink
 {-# INLINABLE asSink #-}
 
 {-| Think of the type as one of the following types:
@@ -306,12 +315,24 @@ handles k (AsSink send_) = AsSink (\a -> case match a of
 {-| A @(Model s a b)@ converts a stream of @(a)@s into a stream of @(b)@s while
     interacting with a state @(s)@
 -}
-newtype Model s a b = AsPipe (Pipe a b (State s) ())
+newtype Model s a b = AsModel (forall m . Monad m => Producer a (StateT s m) () -> Producer b (StateT s m) ())
+
+asGetter :: (forall m . Monad m =>
+             Producer a (StateT s m) () -> Producer b (StateT s m) ())
+            -> Model s a b
+asGetter = AsModel
+
+asPipe :: Pipe a b (State s) () -> Model s a b
+asPipe pipe = AsModel (\producer -> producer >-> hoist (hoist generalize) pipe)
+
+asFold :: (x -> a -> x) -> x -> (x -> b) -> Model s a b
+asFold step begin done =
+    AsModel ((yield =<<) . lift . Pipes.foldM ((return .) . step) (return begin) (return . done))
 
 instance Category (Model s) where
-    (AsPipe m1) . (AsPipe m2) = AsPipe (m1 <-< m2)
+    (AsModel m1) . (AsModel m2) = AsModel (m1 . m2)
 
-    id = AsPipe cat
+    id = AsModel id
 
 {-| Create a `Model` from a `Pipe`
 
@@ -319,8 +340,8 @@ instance Category (Model s) where
 >
 > asPipe cat = id
 -}
-asPipe :: Pipe a b (State s) () -> Model s a b
-asPipe = AsPipe
+-- asPipe :: Pipe a b (State s) () -> Model s a b
+-- asPipe = AsPipe
 {-# INLINABLE asPipe #-}
 
 {- $mvc
@@ -352,12 +373,11 @@ runMVC
     -- ^ Effectful output and input
     -> IO s
     -- ^ Returns final state
-runMVC initialState (AsPipe pipe) viewController =
+runMVC initialState (AsModel model) viewController =
     with viewController $ \(AsSink sink, AsInput input) ->
     flip execStateT initialState $ runEffect $
-            fromInput input
-        >-> hoist (hoist generalize) pipe
-        >-> for cat (liftIO . sink)
+            model (fromInput input) >->
+            for cat (liftIO . sink)
 {-# INLINABLE runMVC #-}
 
 {- $managed
