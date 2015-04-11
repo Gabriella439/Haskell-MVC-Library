@@ -73,6 +73,7 @@ module MVC (
     -- $view
     , View
     , asSink
+    , asFold
     , handles
 
     -- * Models
@@ -102,7 +103,9 @@ module MVC (
     , module Pipes.Concurrent
     ) where
 
+import Control.Applicative (Applicative)
 import Control.Category (Category(..))
+import Control.Foldl (FoldM(..), impurely, premapM, pretraverseM)
 import Control.Monad.Managed (Managed, managed, with)
 import Control.Monad.Morph (generalize)
 import Control.Monad.Trans.State.Strict (State, execStateT)
@@ -112,6 +115,7 @@ import Data.Monoid (Monoid(mempty, mappend, mconcat), (<>), First)
 import qualified Data.Monoid as M
 import Pipes
 import Pipes.Concurrent
+import Pipes.Prelude (foldM)
 
 import Prelude hiding ((.), id)
 
@@ -245,20 +249,32 @@ keeps k (AsInput (Input recv_)) = AsInput (Input recv_')
 >
 > contramap f mempty = mempty
 -}
-newtype View a = AsSink (a -> IO ())
+newtype View a = AsFold (FoldM IO a ())
 
 instance Monoid (View a) where
-    mempty = AsSink (\_ -> return ())
-    mappend (AsSink write1) (AsSink write2) =
-        AsSink (\a -> write1 a >> write2 a)
+    mempty = AsFold mempty
+    mappend (AsFold fold1) (AsFold fold2) = AsFold (mempty fold1 fold2)
 
 instance Contravariant View where
-    contramap f (AsSink k) = AsSink (k . f)
+    contramap f (AsFold fold) = AsFold (premapM f fold)
 
 -- | Create a `View` from a sink
 asSink :: (a -> IO ()) -> View a
-asSink = AsSink 
+asSink sink = AsFold (FoldM step begin done)
+  where
+    step x a = do
+        sink a
+        return x
+    begin = return ()
+    done = return
 {-# INLINABLE asSink #-}
+
+-- | Create a `View` from a `FoldM`
+asFold :: FoldM IO a () -> View a
+asFold = AsFold
+{-# INLINABLE asFold #-}
+
+type Traversal' a b = forall f . Applicative f => (b -> f b) -> a -> f a
 
 {-| Think of the type as one of the following types:
 
@@ -277,16 +293,12 @@ asSink = AsSink
 > handles p mempty = mempty
 -}
 handles
-    :: ((b -> Constant (First b) b) -> (a -> Constant (First b) a))
+    :: Traversal' a b
     -- ^
     -> View b
     -- ^
     -> View a
-handles k (AsSink send_) = AsSink (\a -> case match a of
-    Nothing -> return ()
-    Just b  -> send_ b )
-  where
-    match = M.getFirst . getConstant . k (Constant . M.First . Just)
+handles k (AsFold fold) = AsFold (pretraverseM k fold)
 {-# INLINABLE handles #-}
 
 {- $model
@@ -353,11 +365,13 @@ runMVC
     -> IO s
     -- ^ Returns final state
 runMVC initialState (AsPipe pipe) viewController =
-    with viewController $ \(AsSink sink, AsInput input) ->
-    flip execStateT initialState $ runEffect $
-            fromInput input
-        >-> hoist (hoist generalize) pipe
-        >-> for cat (liftIO . sink)
+    with viewController $ \(AsFold (FoldM step begin done), AsInput input) -> do
+    let step' x a = lift (step x a)
+    let begin'    = lift begin
+    let done'  x  = lift (done x)
+    let fold' = FoldM step' begin' done'
+    flip execStateT initialState $
+        impurely foldM fold' (fromInput input >-> hoist (hoist generalize) pipe)
 {-# INLINABLE runMVC #-}
 
 {- $managed

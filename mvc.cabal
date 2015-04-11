@@ -29,10 +29,11 @@ Library
         base              >= 4       && < 5  ,
         async             >= 2.0.0   && < 2.1,
         contravariant                   < 1.4,
+        foldl                           < 1.1,
         managed                         < 1.1,
         mmorph            >= 1.0.2   && < 1.1,
         pipes             >= 4.1.0   && < 4.2,
-        pipes-concurrency >= 2.0.1   && < 2.1,
+        pipes-concurrency >= 2.0.3   && < 2.1,
         transformers      >= 0.2.0.0 && < 0.5.0.0
     Exposed-Modules:
         MVC,
