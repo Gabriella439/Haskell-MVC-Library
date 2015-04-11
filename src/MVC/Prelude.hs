@@ -50,14 +50,14 @@ producer buffer prod = managed $ \k -> do
 
 -- | Read lines from standard input
 stdinLines :: Managed (Controller String)
-stdinLines = producer Single Pipes.stdinLn
+stdinLines = producer (bounded 1) Pipes.stdinLn
 {-# INLINABLE stdinLines #-}
 
 -- | Read lines from a file
 inLines :: FilePath -> Managed (Controller String)
 inLines filePath = do
     handle <- inHandle filePath
-    producer Single (Pipes.fromHandle handle)
+    producer (bounded 1) (Pipes.fromHandle handle)
 {-# INLINABLE inLines #-}
 
 -- | 'read' values from a file, one value per line, skipping failed parses
@@ -71,7 +71,8 @@ inRead filePath = fmap (keeps parsed) (inLines filePath)
 
 -- | Emit empty values spaced by a delay in seconds
 tick :: Double -> Managed (Controller ())
-tick n = producer Single $ lift (threadDelay (truncate (n * 1000000))) >~ cat
+tick n = producer (bounded 1) $
+    lift (threadDelay (truncate (n * 1000000))) >~ cat
 {-# INLINABLE tick #-}
 
 -- | Create a `View` from a `Consumer`
