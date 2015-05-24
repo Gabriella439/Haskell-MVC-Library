@@ -410,8 +410,8 @@ loop k = for cat (every . k)
 > modelInToOut :: TotalInput -> ListT (State S) TotalOutput
 > modelInToOut totalInput = case totalInput of
 >     InA a -> fmap OutD (modelAToD a)
->     InB b -> fmap OutE (modelAToD b)
->     InC c -> fmap OutF (modelAToD c)
+>     InB b -> fmap OutE (modelBToE b)
+>     InC c -> fmap OutF (modelCToF c)
 
     Sometimes you have multiple computations that handle different inputs but
     the same output, in which case you don't need to unify their outputs:
@@ -426,7 +426,7 @@ loop k = for cat (every . k)
 > modelInToOut totalInput = case totalInput of
 >     InA a -> modelAToOut a
 >     InB b -> modelBToOut b
->     InC c -> modelBToOut b
+>     InC c -> modelCToOut c
 
     Other times you have multiple computations that handle the same input but
     produce different outputs.  You can unify their outputs using the `Monoid`
