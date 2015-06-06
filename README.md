@@ -1,4 +1,4 @@
-# MVC v1.0.4
+# MVC v1.1.0
 
 Use the `mvc` library to distill concurrent programs into pure and
 single-threaded programs using the `Model`-`View`-`Controller` pattern.  The
