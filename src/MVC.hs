@@ -103,9 +103,9 @@ module MVC (
     , module Pipes.Concurrent
     ) where
 
-import Control.Applicative (Applicative)
 import Control.Category (Category(..))
-import Control.Foldl (FoldM(..), impurely, premapM, pretraverseM)
+import Control.Foldl (FoldM(..), HandlerM, impurely, premapM)
+import qualified Control.Foldl as Fold
 import Control.Monad.Managed (Managed, managed, with)
 import Control.Monad.Morph (generalize)
 import Control.Monad.Trans.State.Strict (State, execStateT)
@@ -274,8 +274,6 @@ asFold :: FoldM IO a () -> View a
 asFold = AsFold
 {-# INLINABLE asFold #-}
 
-type Traversal' a b = forall f . Applicative f => (b -> f b) -> a -> f a
-
 {-| Think of the type as one of the following types:
 
 > handles :: Prism'     a b -> View b -> View a
@@ -293,12 +291,12 @@ type Traversal' a b = forall f . Applicative f => (b -> f b) -> a -> f a
 > handles p mempty = mempty
 -}
 handles
-    :: Traversal' a b
+    :: HandlerM IO a b
     -- ^
     -> View b
     -- ^
     -> View a
-handles k (AsFold fold) = AsFold (pretraverseM k fold)
+handles k (AsFold fold) = AsFold (Fold.handlesM k fold)
 {-# INLINABLE handles #-}
 
 {- $model
