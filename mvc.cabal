@@ -29,7 +29,7 @@ Library
         base              >= 4       && < 5  ,
         async             >= 2.0.0   && < 2.1,
         contravariant                   < 1.4,
-        foldl                           < 1.1,
+        foldl             >= 1.1     && < 1.2,
         managed                         < 1.1,
         mmorph            >= 1.0.2   && < 1.1,
         pipes             >= 4.1.0   && < 4.2,
