@@ -253,7 +253,7 @@ newtype View a = AsFold (FoldM IO a ())
 
 instance Monoid (View a) where
     mempty = AsFold mempty
-    mappend (AsFold fold1) (AsFold fold2) = AsFold (mempty fold1 fold2)
+    mappend (AsFold fold1) (AsFold fold2) = AsFold (mappend fold1 fold2)
 
 instance Contravariant View where
     contramap f (AsFold fold) = AsFold (premapM f fold)
