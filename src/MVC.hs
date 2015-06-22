@@ -79,11 +79,13 @@ module MVC (
     -- * Models
     -- $model
     , Model
+    , ModelM
     , asPipe
 
     -- * MVC
     -- $mvc
     , runMVC
+    , generalizeMVC
 
     -- * Managed resources
     -- $managed
@@ -108,7 +110,7 @@ import Control.Foldl (FoldM(..), HandlerM, impurely, premapM)
 import qualified Control.Foldl as Fold
 import Control.Monad.Managed (Managed, managed, with)
 import Control.Monad.Morph (generalize)
-import Control.Monad.Trans.State.Strict (State, execStateT)
+import Control.Monad.Trans.State.Strict (execStateT, StateT)
 import Data.Functor.Constant (Constant(Constant, getConstant))
 import Data.Functor.Contravariant (Contravariant(contramap))
 import Data.Monoid (Monoid(mempty, mappend, mconcat), (<>), First)
@@ -116,6 +118,7 @@ import qualified Data.Monoid as M
 import Pipes
 import Pipes.Concurrent
 import Pipes.Prelude (foldM)
+import Data.Functor.Identity (Identity)
 
 import Prelude hiding ((.), id)
 
@@ -316,9 +319,10 @@ handles k (AsFold fold) = AsFold (Fold.handlesM k fold)
 {-| A @(Model s a b)@ converts a stream of @(a)@s into a stream of @(b)@s while
     interacting with a state @(s)@
 -}
-newtype Model s a b = AsPipe (Pipe a b (State s) ())
+newtype ModelM m s a b = AsPipe (Pipe a b (StateT s m) ())
+type Model = ModelM Identity
 
-instance Category (Model s) where
+instance Monad m => Category (ModelM m s) where
     (AsPipe m1) . (AsPipe m2) = AsPipe (m1 <-< m2)
 
     id = AsPipe cat
@@ -329,7 +333,7 @@ instance Category (Model s) where
 >
 > asPipe cat = id
 -}
-asPipe :: Pipe a b (State s) () -> Model s a b
+asPipe :: Pipe a b (StateT s m) () -> ModelM m s a b
 asPipe = AsPipe
 {-# INLINABLE asPipe #-}
 
@@ -353,8 +357,8 @@ asPipe = AsPipe
 {-| Connect a `Model`, `View`, and `Controller` and initial state into a
     complete application.
 -}
-runMVC
-    :: s
+
+runMVC :: s
     -- ^ Initial state
     -> Model s a b
     -- ^ Program logic
@@ -362,14 +366,30 @@ runMVC
     -- ^ Effectful output and input
     -> IO s
     -- ^ Returns final state
-runMVC initialState (AsPipe pipe) viewController =
+runMVC = generalizeMVC generalize
+
+{-| Connect a `Model`, `View`, and `Controller` and initial state into a
+    complete application over arbitrary monad given a morphism to IO.
+-}
+generalizeMVC
+    :: Monad m => (forall x . m x -> IO x)
+    -- ^ Monad morphism
+    -> s
+    -- ^ Initial state
+    -> ModelM m s a b
+    -- ^ Program logic
+    -> Managed (View b, Controller a)
+    -- ^ Effectful output and input
+    -> IO s
+    -- ^ Returns final state
+generalizeMVC cb initialState (AsPipe pipe) viewController =
     with viewController $ \(AsFold (FoldM step begin done), AsInput input) -> do
     let step' x a = lift (step x a)
     let begin'    = lift begin
     let done'  x  = lift (done x)
     let fold' = FoldM step' begin' done'
     flip execStateT initialState $
-        impurely foldM fold' (fromInput input >-> hoist (hoist generalize) pipe)
+        impurely foldM fold' (fromInput input >-> hoist (hoist cb) pipe)
 {-# INLINABLE runMVC #-}
 
 {- $managed
