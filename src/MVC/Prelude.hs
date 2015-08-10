@@ -22,6 +22,9 @@ module MVC.Prelude (
     , inHandle
     , outHandle
 
+    -- * Threads
+    , forkManaged
+
     -- * Example
     -- $example
     ) where
@@ -35,17 +38,23 @@ import Pipes.Internal (Proxy(..), closed)
 import qualified Pipes.Prelude as Pipes
 import qualified System.IO as IO
 
+-- | Fork managed computation in a new thread. See `producer` source for usage example.
+forkManaged :: IO (IO (), a, IO ()) -- ^ Setup action returning thread's main,
+                                    -- managed value, finalizer.
+    -> Managed a
+forkManaged cb = managed $ \k -> do
+    (io, ret, fin) <- cb
+    withAsync (io >> fin) $ \_ -> k ret <* fin
+{-# INLINABLE forkManaged #-}
+
 {-| Create a `Controller` from a `Producer`, using the given `Buffer`
 
     If you're not sure what `Buffer` to use, try `Single`
 -}
 producer :: Buffer a -> Producer a IO () -> Managed (Controller a)
-producer buffer prod = managed $ \k -> do
+producer buffer prod = forkManaged $ do
     (o, i, seal) <- spawn' buffer
-    let io = do
-            runEffect $ prod >-> toOutput o
-            atomically seal
-    withAsync io $ \_ -> k (asInput i) <* atomically seal
+    return (runEffect $ prod >-> toOutput o, asInput i, atomically seal)
 {-# INLINABLE producer #-}
 
 -- | Read lines from standard input
