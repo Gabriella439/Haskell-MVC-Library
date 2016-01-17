@@ -117,7 +117,7 @@ import Data.Monoid (Monoid(mempty, mappend, mconcat), (<>), First)
 import qualified Data.Monoid as M
 import Pipes
 import Pipes.Concurrent
-import Pipes.Prelude (foldM)
+import Pipes.Prelude (foldM, loop)
 import Data.Functor.Identity (Identity)
 
 import Prelude hiding ((.), id)
@@ -400,16 +400,6 @@ generalizeMVC cb initialState (AsPipe pipe) viewController =
     See the source code for the \"Utilities\" section below for several examples
     of how to create `Managed` resources.
 -}
-
-{-| Create a `Pipe` from a `ListT` transformation
-
-> loop (k1 >=> k2) = loop k1 >-> loop k2
->
-> loop return = cat
--}
-loop :: Monad m => (a -> ListT m b) -> Pipe a b m r
-loop k = for cat (every . k)
-{-# INLINABLE loop #-}
 
 {- $listT
     `ListT` computations can be combined in more ways than `Pipe`s, so try to
