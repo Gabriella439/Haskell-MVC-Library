@@ -147,6 +147,7 @@ outHandle filePath = managed (IO.withFile filePath IO.WriteMode)
     the same initialization logic:
 
 > import Control.Monad (join)
+> import Control.Monad.Managed (managed_)
 > import Graphics.UI.SDL as SDL
 > import Lens.Family.Stock (_Left, _Right)  -- from `lens-family-core`
 > import MVC
@@ -156,9 +157,10 @@ outHandle filePath = managed (IO.withFile filePath IO.WriteMode)
 > data Done = Done deriving (Eq, Show)
 > 
 > sdl :: Managed (View (Either Rect Done), Controller Event)
-> sdl = join $ managed $ \k -> withInit [InitVideo, InitEventthread] $ do
->     surface <- setVideoMode 640 480 32 [SWSurface]
->     white   <- mapRGB (surfaceGetPixelFormat surface) 255 255 255
+> sdl = do
+>     managed_ (withInit [InitVideo, InitEventthread])
+>     surface <- liftIO $ setVideoMode 640 480 32 [SWSurface]
+>     white   <- liftIO $ mapRGB (surfaceGetPixelFormat surface) 255 255 255
 > 
 >     let done :: View Done
 >         done = asSink (\Done -> SDL.quit)
@@ -171,18 +173,11 @@ outHandle filePath = managed (IO.withFile filePath IO.WriteMode)
 >         totalOut :: View (Either Rect Done)
 >         totalOut = handles _Left drawRect <> handles _Right done
 > 
->     k $ do
->         totalIn <- producer Single (lift waitEvent >~ cat)
->         return (totalOut, totalIn)
+>     totalIn <- producer Single (lift waitEvent >~ cat)
+>     return (totalOut, totalIn)
 
-    Note the `Control.Monad.join` surrounding the `managed` block.  This is
-    because the type before `Control.Monad.join` is:
-
-> Managed (Managed (View (Either Rect Done), Controller Event))
-
-    More generally, note that `Managed` is a `Monad`, so you can use @do@
-    notation to combine multiple `Managed` resources into a single `Managed`
-    resource.
+    Note that `Managed` is a `Monad`, so you can use @do@ notation to 
+    combine multiple `Managed` resources into a single `Managed` resource.
 
     The second half of the program contains the pure logic.
 
