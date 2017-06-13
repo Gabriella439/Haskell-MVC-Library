@@ -39,4 +39,4 @@ Library
     Exposed-Modules:
         MVC,
         MVC.Prelude
-    GHC-Options: -O2 -Wall
+    GHC-Options: -Wall
