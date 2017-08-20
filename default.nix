@@ -3,7 +3,7 @@
 }:
 mkDerivation {
   pname = "mvc";
-  version = "1.1.3";
+  version = "1.1.5";
   src = ./.;
   libraryHaskellDepends = [
     async base contravariant foldl managed mmorph pipes
