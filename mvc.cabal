@@ -33,7 +33,7 @@ Library
         foldl             >= 1.1     && < 1.4,
         managed                         < 1.1,
         mmorph            >= 1.0.2   && < 1.1,
-        pipes             >= 4.1.7   && < 4.3.8,
+        pipes             >= 4.1.7   && < 4.4,
         pipes-concurrency >= 2.0.3   && < 2.1,
         transformers      >= 0.2.0.0 && < 0.6
     Exposed-Modules:
