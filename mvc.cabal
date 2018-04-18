@@ -28,11 +28,11 @@ Library
     Hs-Source-Dirs: src
     Build-Depends:
         base              >= 4       && < 5  ,
-        async             >= 2.0.0   && < 2.2,
+        async             >= 2.0.0   && < 2.3,
         contravariant                   < 1.5,
         foldl             >= 1.1     && < 1.4,
         managed                         < 1.1,
-        mmorph            >= 1.0.2   && < 1.1,
+        mmorph            >= 1.0.2   && < 1.2,
         pipes             >= 4.1.7   && < 4.4,
         pipes-concurrency >= 2.0.3   && < 2.1,
         transformers      >= 0.2.0.0 && < 0.6
