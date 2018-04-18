@@ -115,6 +115,7 @@ import Data.Functor.Constant (Constant(Constant, getConstant))
 import Data.Functor.Contravariant (Contravariant(contramap))
 import Data.Monoid (Monoid(mempty, mappend, mconcat), (<>), First)
 import qualified Data.Monoid as M
+import qualified Data.Semigroup as S
 import Pipes
 import Pipes.Concurrent
 import Pipes.Prelude (foldM, loop)
@@ -161,9 +162,13 @@ newtype Controller a = AsInput (Input a)
 instance Functor Controller where
     fmap f (AsInput i) = AsInput (fmap f i)
 
+-- Deriving `Semigroup`
+instance S.Semigroup (Controller a) where
+    (AsInput i1) <> (AsInput i2) = AsInput (i1 S.<> i2)
+
 -- Deriving `Monoid`
 instance Monoid (Controller a) where
-    mappend (AsInput i1) (AsInput i2) = AsInput (mappend i1 i2)
+    mappend = (<>)
 
     mempty = AsInput mempty
 
@@ -254,9 +259,12 @@ keeps k (AsInput (Input recv_)) = AsInput (Input recv_')
 -}
 newtype View a = AsFold (FoldM IO a ())
 
+instance S.Semigroup (View a) where
+    (AsFold fold1) <> (AsFold fold2) = AsFold (fold1 S.<> fold2)
+
 instance Monoid (View a) where
     mempty = AsFold mempty
-    mappend (AsFold fold1) (AsFold fold2) = AsFold (mappend fold1 fold2)
+    mappend = (<>)
 
 instance Contravariant View where
     contramap f (AsFold fold) = AsFold (premapM f fold)
