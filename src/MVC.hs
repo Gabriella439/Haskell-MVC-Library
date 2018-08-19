@@ -267,7 +267,7 @@ instance Monoid (View a) where
     mappend = (<>)
 
 instance Contravariant View where
-    contramap f (AsFold fold) = AsFold (premapM f fold)
+    contramap f (AsFold fold) = AsFold (premapM (return . f) fold)
 
 -- | Create a `View` from a sink
 asSink :: (a -> IO ()) -> View a
