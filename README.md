@@ -70,7 +70,7 @@ user interfaces and games.
 
 ## License (BSD 3-clause)
 
-Copyright (c) 2014 Gabriel Gonzalez
+Copyright (c) 2014 Gabriella Gonzalez
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without modification,
@@ -83,7 +83,7 @@ are permitted provided that the following conditions are met:
   list of conditions and the following disclaimer in the documentation and/or
   other materials provided with the distribution.
 
-* Neither the name of Gabriel Gonzalez nor the names of other contributors may
+* Neither the name of Gabriella Gonzalez nor the names of other contributors may
   be used to endorse or promote products derived from this software without
   specific prior written permission.
 
