@@ -4,11 +4,11 @@ Cabal-Version: >=1.8.0.2
 Build-Type: Simple
 License: BSD3
 License-File: LICENSE
-Copyright: 2014 Gabriel Gonzalez
-Author: Gabriel Gonzalez
-Maintainer: Gabriel439@gmail.com
+Copyright: 2014 Gabriella Gonzalez
+Author: Gabriella Gonzalez
+Maintainer: GenuineGabriella@gmail.com
 Tested-With: GHC == 8.0.2
-Bug-Reports: https://github.com/Gabriel439/Haskell-MVC-Library/issues
+Bug-Reports: https://github.com/Gabriella439/Haskell-MVC-Library/issues
 Synopsis: Model-view-controller
 Description: Use the @mvc@ library to distill concurrent programs into pure and
   single-threaded programs using the @Model@-@View@-@Controller@ pattern.  This
@@ -22,7 +22,7 @@ Description: Use the @mvc@ library to distill concurrent programs into pure and
 Category: Control, Concurrency
 Source-Repository head
     Type: git
-    Location: https://github.com/Gabriel439/Haskell-MVC-Library
+    Location: https://github.com/Gabriella439/Haskell-MVC-Library
 
 Library
     Hs-Source-Dirs: src
